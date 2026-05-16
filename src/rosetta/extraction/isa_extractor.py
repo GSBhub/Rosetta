@@ -43,11 +43,19 @@ class _RegisterList(BaseModel):
     registers: list[RegisterDef]
 
 
-def _make_pipeline(db_path: str, output_model: Any, system_prompt: str, settings: DocSettings) -> ExtractionPipeline:
+def _probe_embedding_dim(settings: DocSettings) -> int:
+    """Return the actual embedding dimension for the configured model."""
+    embeddings = get_embeddings(settings)
+    return len(embeddings.embed_query("probe"))
+
+
+def _make_pipeline(db_path: str, output_model: Any, system_prompt: str, settings: DocSettings, embedding_dim: int | None = None) -> ExtractionPipeline:
+    dim = embedding_dim if embedding_dim is not None else _probe_embedding_dim(settings)
     return ExtractionPipeline(
         db_path=db_path,
         output_model=output_model,
         system_prompt=system_prompt,
+        embedding_dim=dim,
         settings=settings,
     )
 
@@ -57,6 +65,7 @@ async def _extract_instruction_async(
     db_path: str,
     settings: DocSettings,
     semaphore: asyncio.Semaphore,
+    embedding_dim: int | None = None,
 ) -> InstructionDef:
     async with semaphore:
         pipeline = _make_pipeline(
@@ -69,6 +78,7 @@ async def _extract_instruction_async(
                 "Return only JSON matching the schema."
             ),
             settings=settings,
+            embedding_dim=embedding_dim,
         )
         query = (
             f"For the {mnemonic} instruction: list all assembly syntax variants, "
@@ -119,12 +129,19 @@ class ISAExtractor:
     def __init__(self, db_path: str | Path, settings: DocSettings | None = None):
         self.db_path = str(db_path)
         self.settings = settings or DocSettings()
+        self._embedding_dim: int | None = None  # probed once on first use
+
+    def _get_embedding_dim(self) -> int:
+        if self._embedding_dim is None:
+            self._embedding_dim = _probe_embedding_dim(self.settings)
+            log.info("Embedding dimension: %d", self._embedding_dim)
+        return self._embedding_dim
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-    def extract(self, max_concurrent: int = 4) -> ISASpec:
+    def extract(self, max_concurrent: int = 4, max_instructions: int | None = None) -> ISASpec:
         """Run all five passes and return a complete ISASpec."""
         log.info("Pass 1: extracting ISA metadata")
         meta = self._pass1_meta()
@@ -135,6 +152,10 @@ class ISAExtractor:
         log.info("Pass 3: extracting instruction mnemonic list")
         mnemonics = self._pass3_mnemonics()
         log.info("Found %d mnemonics", len(mnemonics))
+
+        if max_instructions and len(mnemonics) > max_instructions:
+            log.info("Capping at %d instructions (--max-instructions)", max_instructions)
+            mnemonics = mnemonics[:max_instructions]
 
         log.info("Pass 4: extracting per-instruction details (concurrency=%d)", max_concurrent)
         instructions = asyncio.run(self._pass4_instructions(mnemonics, max_concurrent))
@@ -167,6 +188,7 @@ class ISAExtractor:
                 "Return only JSON matching the schema."
             ),
             settings=self.settings,
+            embedding_dim=self._get_embedding_dim(),
         )
         result = pipeline.run(
             "What is the endianness (little or big), native word size in bits, "
@@ -190,6 +212,7 @@ class ISAExtractor:
                 "Return only JSON matching the schema."
             ),
             settings=self.settings,
+            embedding_dim=self._get_embedding_dim(),
         )
         result = pipeline.run(
             "List every programmer-visible register: canonical name, any aliases, "
@@ -200,30 +223,16 @@ class ISAExtractor:
         return []
 
     def _pass3_mnemonics(self) -> list[str]:
-        pipeline = _make_pipeline(
-            db_path=self.db_path,
-            output_model=_MnemonicList,
-            system_prompt=(
-                "You are an expert ISA analyst. Extract the complete list of instruction "
-                "mnemonics defined in this manual. Return only JSON matching the schema."
-            ),
-            settings=self.settings,
-        )
-        result = pipeline.run(
-            "List every instruction mnemonic defined in this ISA manual. "
-            "Include all base mnemonics (e.g. ADD, SUB, LDR) but not condition-code "
-            "suffixes as separate entries."
-        )
-        if isinstance(result, _MnemonicList):
-            return [m.upper() for m in result.mnemonics]
-        return []
+        from rosetta.extraction.mnemonic_discovery import discover_mnemonics
+        return discover_mnemonics(self.db_path, self.settings, self._get_embedding_dim())
 
     async def _pass4_instructions(
         self, mnemonics: list[str], max_concurrent: int
     ) -> list[InstructionDef]:
         semaphore = asyncio.Semaphore(max_concurrent)
+        dim = self._get_embedding_dim()
         tasks = [
-            _extract_instruction_async(m, self.db_path, self.settings, semaphore)
+            _extract_instruction_async(m, self.db_path, self.settings, semaphore, dim)
             for m in mnemonics
         ]
         results = await asyncio.gather(*tasks)
