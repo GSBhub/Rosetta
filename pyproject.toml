@@ -1,0 +1,31 @@
+[project]
+name = "rosetta"
+version = "0.1.0"
+description = "ISA manual → Ghidra processor module generator"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "docquery @ git+https://github.com/gsbhub/docquery",
+    "jinja2>=3.1",
+    "click>=8.1",
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+    "matplotlib>=3.8",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v"
+
+[project.scripts]
+rosetta = "rosetta.cli:cli"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rosetta"]
