@@ -68,36 +68,39 @@ async def _extract_instruction_async(
     embedding_dim: int | None = None,
 ) -> InstructionDef:
     async with semaphore:
-        pipeline = _make_pipeline(
-            db_path=db_path,
-            output_model=InstructionDef,
-            system_prompt=(
-                "You are an expert ISA analyst. Extract precise encoding details for the "
-                "instruction. For bit_fields provide 'high:low' notation. For bit_constraints "
-                "provide the required binary value. If unknown, use empty dict. "
-                "Return only JSON matching the schema."
-            ),
-            settings=settings,
-            embedding_dim=embedding_dim,
-        )
         query = (
             f"For the {mnemonic} instruction: list all assembly syntax variants, "
             f"the encoding width in bits, all bit field names with their bit positions "
             f"(high:low), any required bit values, operand names, and a full description "
             f"of the operation semantics."
         )
-        try:
-            result = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: pipeline.run(query)
+
+        def _run_sync() -> InstructionDef:
+            # Pipeline (and its SQLite connection) must be created inside the
+            # executor thread — SQLite connections cannot be shared across threads.
+            pipeline = _make_pipeline(
+                db_path=db_path,
+                output_model=InstructionDef,
+                system_prompt=(
+                    "You are an expert ISA analyst. Extract precise encoding details for the "
+                    "instruction. For bit_fields provide 'high:low' notation. For bit_constraints "
+                    "provide the required binary value. If unknown, use empty dict. "
+                    "Return only JSON matching the schema."
+                ),
+                settings=settings,
+                embedding_dim=embedding_dim,
             )
+            result = pipeline.run(query)
             if isinstance(result, InstructionDef):
                 return result
-            # Fallback: build a minimal def if extraction partially succeeded
             return InstructionDef(
                 mnemonic=mnemonic,
                 semantics=str(result),
                 encoding_bits=32,
             )
+
+        try:
+            return await asyncio.get_event_loop().run_in_executor(None, _run_sync)
         except Exception as exc:
             log.warning("Failed to extract %s: %s", mnemonic, exc)
             return InstructionDef(
@@ -141,31 +144,97 @@ class ISAExtractor:
     # Public API
     # ------------------------------------------------------------------
 
-    def extract(self, max_concurrent: int = 4, max_instructions: int | None = None) -> ISASpec:
-        """Run all five passes and return a complete ISASpec."""
+    def extract(
+        self,
+        max_concurrent: int = 2,
+        max_instructions: int | None = None,
+        max_pcode: int | None = None,
+        stop_after: str | None = None,
+        filter_mnemonics: str | None = None,
+        memory_warn_gb: float = 2.0,
+        debug_save_dir: Path | None = None,
+        debug_prefix: str = "debug",
+    ) -> ISASpec:
+        """Run extraction passes and return an ISASpec.
+
+        stop_after: stop early after "meta", "registers", "mnemonics", or "instructions".
+        filter_mnemonics: comma-separated glob patterns to keep (e.g. "MOV*,ADD,SUB*").
+        max_pcode: generate P-code for only the first N instructions in pass 5.
+        debug_save_dir: write per-pass JSON snapshots here for post-mortem inspection.
+        """
+        from rosetta.utils.memory_guard import check_memory_headroom, log_memory
+
+        log_memory("extract-start")
+        check_memory_headroom(min_free_gb=memory_warn_gb)
+
         log.info("Pass 1: extracting ISA metadata")
         meta = self._pass1_meta()
+        log_memory("after-pass1")
+        if debug_save_dir:
+            self._save_debug(ISASpec(meta=meta), debug_save_dir / f"{debug_prefix}_debug_pass1_meta.json")
+        if stop_after == "meta":
+            return ISASpec(meta=meta)
 
         log.info("Pass 2: extracting register file")
         registers = self._pass2_registers()
+        log_memory("after-pass2")
+        if debug_save_dir:
+            self._save_debug(ISASpec(meta=meta, registers=registers), debug_save_dir / f"{debug_prefix}_debug_pass2_registers.json")
+        if stop_after == "registers":
+            return ISASpec(meta=meta, registers=registers)
 
         log.info("Pass 3: extracting instruction mnemonic list")
         mnemonics = self._pass3_mnemonics()
         log.info("Found %d mnemonics", len(mnemonics))
+        log_memory("after-pass3")
+
+        if filter_mnemonics:
+            import fnmatch
+            patterns = [p.strip().upper() for p in filter_mnemonics.split(",")]
+            before = len(mnemonics)
+            mnemonics = [m for m in mnemonics if any(fnmatch.fnmatch(m, p) for p in patterns)]
+            log.info("Filter %r: %d → %d mnemonics", filter_mnemonics, before, len(mnemonics))
+
+        if debug_save_dir:
+            self._save_debug(mnemonics, debug_save_dir / f"{debug_prefix}_debug_pass3_mnemonics.json")
+        if stop_after == "mnemonics":
+            return ISASpec(meta=meta, registers=registers)
 
         if max_instructions and len(mnemonics) > max_instructions:
             log.info("Capping at %d instructions (--max-instructions)", max_instructions)
             mnemonics = mnemonics[:max_instructions]
 
+        chunk_save = (debug_save_dir / f"{debug_prefix}_debug_pass4_partial.json") if debug_save_dir else None
         log.info("Pass 4: extracting per-instruction details (concurrency=%d)", max_concurrent)
-        instructions = asyncio.run(self._pass4_instructions(mnemonics, max_concurrent))
+        instructions = asyncio.run(
+            self._pass4_instructions(mnemonics, max_concurrent, memory_warn_gb, chunk_save_path=chunk_save)
+        )
+        log_memory("after-pass4")
+        if debug_save_dir:
+            self._save_debug(
+                ISASpec(meta=meta, registers=registers, instructions=instructions),
+                debug_save_dir / f"{debug_prefix}_debug_pass4_instructions.json",
+            )
+        if stop_after == "instructions":
+            return ISASpec(meta=meta, registers=registers, instructions=instructions)
 
         log.info("Pass 5: generating P-code hints")
-        for instr in instructions:
+        pcode_targets = instructions[:max_pcode] if max_pcode else instructions
+        if max_pcode:
+            log.info("Limiting P-code generation to first %d instructions", max_pcode)
+        for instr in pcode_targets:
             if not instr.pcode_hint:
                 instr.pcode_hint = _generate_pcode(instr, self.settings)
+        log_memory("after-pass5")
 
         return ISASpec(meta=meta, registers=registers, instructions=instructions)
+
+    def _save_debug(self, obj: Any, path: Path) -> None:
+        if isinstance(obj, ISASpec):
+            path.write_text(obj.model_dump_json(indent=2))
+        else:
+            path.write_text(json.dumps(obj, indent=2))
+        log.info("Debug save → %s", path)
 
     def save(self, spec: ISASpec, path: str | Path) -> None:
         Path(path).write_text(spec.model_dump_json(indent=2))
@@ -227,13 +296,38 @@ class ISAExtractor:
         return discover_mnemonics(self.db_path, self.settings, self._get_embedding_dim())
 
     async def _pass4_instructions(
-        self, mnemonics: list[str], max_concurrent: int
+        self,
+        mnemonics: list[str],
+        max_concurrent: int,
+        memory_warn_gb: float = 2.0,
+        chunk_size: int = 20,
+        chunk_save_path: Path | None = None,
     ) -> list[InstructionDef]:
+        import gc
+        from rosetta.utils.memory_guard import check_memory_headroom, log_memory
+
         semaphore = asyncio.Semaphore(max_concurrent)
         dim = self._get_embedding_dim()
-        tasks = [
-            _extract_instruction_async(m, self.db_path, self.settings, semaphore, dim)
-            for m in mnemonics
-        ]
-        results = await asyncio.gather(*tasks)
-        return list(results)
+        results: list[InstructionDef] = []
+
+        for i in range(0, len(mnemonics), chunk_size):
+            chunk = mnemonics[i : i + chunk_size]
+            log.info(
+                "Pass 4: instructions %d–%d / %d",
+                i + 1,
+                i + len(chunk),
+                len(mnemonics),
+            )
+            check_memory_headroom(min_free_gb=memory_warn_gb)
+            tasks = [
+                _extract_instruction_async(m, self.db_path, self.settings, semaphore, dim)
+                for m in chunk
+            ]
+            chunk_results = await asyncio.gather(*tasks)
+            results.extend(chunk_results)
+            gc.collect()
+            log_memory(f"pass4-chunk-{i // chunk_size}")
+            if chunk_save_path:
+                chunk_save_path.write_text(json.dumps([r.model_dump() for r in results], indent=2))
+
+        return results

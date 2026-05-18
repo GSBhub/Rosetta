@@ -152,13 +152,14 @@ def _check_node(state: _MnemonicState) -> _MnemonicState:
     coverage = unique / expected
 
     no_strategies_left = len(state["strategies"]) == 0
-    coverage_met = coverage >= 0.9
-    stalled = state["last_new_count"] == 0
 
-    done = no_strategies_left or coverage_met or stalled
+    # Only stop when all strategies are exhausted — coverage-based early exit is
+    # unreliable because the LLM's instruction-count estimate is often far too low,
+    # which causes the loop to terminate after just one strategy.
+    done = no_strategies_left
     log.info(
-        "Check: unique=%d expected=%d coverage=%.0f%% stalled=%s → done=%s",
-        unique, expected, coverage * 100, stalled, done,
+        "Check: unique=%d expected=%d coverage=%.0f%% strategies_left=%d → done=%s",
+        unique, expected, coverage * 100, len(state["strategies"]), done,
     )
     return {**state, "done": done}
 

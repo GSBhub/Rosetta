@@ -41,6 +41,8 @@ def run_batch(
     ghidra_home: Path,
     settings: DocSettings | None = None,
     skip_extraction: bool = False,
+    target_filter: str | None = None,
+    max_concurrent: int = 4,
 ) -> list[dict]:
     """
     For each target in the manifest:
@@ -53,6 +55,10 @@ def run_batch(
     """
     settings = settings or DocSettings()
     targets = load_manifest(manifest_path)
+    if target_filter:
+        targets = [t for t in targets if t["id"] == target_filter]
+        if not targets:
+            raise ValueError(f"No manifest target with id={target_filter!r}")
     generator = ModuleGenerator()
     results = []
 
@@ -77,7 +83,7 @@ def run_batch(
                 results.append(row)
                 continue
             extractor = ISAExtractor(db_path=db_path, settings=settings)
-            spec = extractor.extract()
+            spec = extractor.extract(max_concurrent=max_concurrent)
             extractor.save(spec, spec_json)
 
         # 2. Generate

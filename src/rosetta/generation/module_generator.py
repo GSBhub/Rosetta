@@ -8,7 +8,7 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
-from rosetta.extraction.schemas import ISASpec, RegisterDef
+from rosetta.extraction.schemas import ISASpec, InstructionDef, RegisterDef
 
 log = logging.getLogger(__name__)
 
@@ -75,3 +75,34 @@ class ModuleGenerator:
 
         log.info("Module generated in %s", lang_dir)
         return lang_dir
+
+    def append_to_slaspec(self, spec: ISASpec, slaspec_path: Path) -> int:
+        """Append new instruction constructor blocks to an existing .slaspec file.
+
+        Skips any instruction whose mnemonic is already present in the file.
+        Returns the count of constructors appended.
+        """
+        existing_text = slaspec_path.read_text()
+
+        defined: set[str] = set(re.findall(r"^:([A-Z][A-Z0-9]*)\b", existing_text, re.MULTILINE))
+        new_instrs = [i for i in spec.instructions if i.mnemonic.upper() not in defined]
+
+        if not new_instrs:
+            log.info("append_to_slaspec: no new instructions to append to %s", slaspec_path.name)
+            return 0
+
+        constrained = [i.mnemonic for i in new_instrs if i.bit_constraints]
+        if constrained:
+            log.warning(
+                "append_to_slaspec: %d instruction(s) have bit_constraints that may require "
+                "token declarations not present in %s: %s",
+                len(constrained), slaspec_path.name, ", ".join(constrained[:10]),
+            )
+
+        tmpl = self._env.get_template("constructor_block.j2")
+        rendered = tmpl.render(instructions=new_instrs)
+
+        separator = f"\n# --- appended by rosetta ({len(new_instrs)} instruction(s)) ---\n"
+        slaspec_path.write_text(existing_text.rstrip() + "\n" + separator + rendered)
+        log.info("Appended %d constructor(s) to %s", len(new_instrs), slaspec_path)
+        return len(new_instrs)

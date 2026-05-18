@@ -35,6 +35,35 @@ def _load_env() -> None:
 _load_env()
 
 
+def _install_llm_providers() -> None:
+    """Patch docquery's get_llm in-place to support LLM_PROVIDER=anthropic."""
+    if os.environ.get("LLM_PROVIDER") != "anthropic":
+        return
+    from rosetta.utils.llm import get_llm as _extended
+    import docquery.embeddings.llm as _llm_mod
+    _llm_mod.get_llm = _extended
+
+
+_install_llm_providers()
+
+
+def _apply_model_overrides(
+    llm_model: str | None,
+    llm_base_url: str | None,
+    embed_model: str | None,
+    embed_base_url: str | None,
+) -> None:
+    """Override model/endpoint env vars before Settings() is instantiated."""
+    if llm_model:
+        os.environ["LLM_MODEL"] = llm_model
+    if llm_base_url:
+        os.environ["LLM_BASE_URL"] = llm_base_url
+    if embed_model:
+        os.environ["EMBED_MODEL"] = embed_model
+    if embed_base_url:
+        os.environ["EMBED_BASE_URL"] = embed_base_url
+
+
 @click.group()
 def cli() -> None:
     """Rosetta: ISA manual → Ghidra processor module generator."""
@@ -48,7 +77,9 @@ def cli() -> None:
 @cli.command()
 @click.argument("manual", type=click.Path(exists=True, dir_okay=False))
 @click.option("--db", required=True, help="Output docquery SQLite database path")
-def ingest(manual: str, db: str) -> None:
+@click.option("--embed-model", default=None, help="Override EMBED_MODEL env var")
+@click.option("--embed-base-url", default=None, help="Override EMBED_BASE_URL env var")
+def ingest(manual: str, db: str, embed_model: str | None, embed_base_url: str | None) -> None:
     """Ingest a PDF manual into a docquery RAG database."""
     from docquery.config import Settings
     from docquery.ingestion.chunker import chunk
@@ -56,6 +87,7 @@ def ingest(manual: str, db: str) -> None:
     from docquery.embeddings.provider import get_embeddings
     from docquery.storage.vector_store import VectorStore
 
+    _apply_model_overrides(None, None, embed_model, embed_base_url)
     settings = Settings()
     click.echo(f"Loading {manual} ...")
     docs = load(manual)
@@ -80,29 +112,91 @@ def ingest(manual: str, db: str) -> None:
 @click.option("--name", required=True, help="Processor name (used as file prefix)")
 @click.option("--out", default="./output", show_default=True, help="Output directory")
 @click.option("--spec-json", default=None, help="Load existing isa_spec.json (skip extraction)")
-@click.option("--concurrency", default=4, show_default=True, help="Parallel instruction extraction workers")
-def generate(db: str, name: str, out: str, spec_json: str | None, concurrency: int) -> None:
+@click.option("--concurrency", default=2, show_default=True, help="Parallel instruction extraction workers")
+@click.option("--max-instructions", default=None, type=int, help="Cap number of instructions extracted (useful for quick tests)")
+@click.option("--max-pcode", default=None, type=int, help="Limit P-code generation (pass 5) to first N instructions")
+@click.option("--stop-after", default=None,
+    type=click.Choice(["meta", "registers", "mnemonics", "instructions"]),
+    help="Stop extraction after this pass and skip Ghidra file generation")
+@click.option("--filter-mnemonics", default=None,
+    help="Comma-separated glob patterns to keep after pass 3, e.g. 'MOV*,ADD,SUB*'")
+@click.option("--append-slaspec", default=None, type=click.Path(),
+    help="Append new instruction constructors to this .slaspec instead of generating a full module")
+@click.option("--memory-warn-gb", default=2.0, show_default=True, help="Warn when free system RAM falls below this threshold (GB)")
+@click.option("--llm-model", default=None, help="Override LLM_MODEL env var (e.g. llama3:8b)")
+@click.option("--llm-base-url", default=None, help="Override LLM_BASE_URL env var")
+@click.option("--embed-model", default=None, help="Override EMBED_MODEL env var")
+@click.option("--embed-base-url", default=None, help="Override EMBED_BASE_URL env var")
+def generate(
+    db: str,
+    name: str,
+    out: str,
+    spec_json: str | None,
+    concurrency: int,
+    max_instructions: int | None,
+    max_pcode: int | None,
+    stop_after: str | None,
+    filter_mnemonics: str | None,
+    append_slaspec: str | None,
+    memory_warn_gb: float,
+    llm_model: str | None,
+    llm_base_url: str | None,
+    embed_model: str | None,
+    embed_base_url: str | None,
+) -> None:
     """Extract ISA from database and generate a Ghidra processor module."""
     from rosetta.config import Settings
     from rosetta.extraction.isa_extractor import ISAExtractor
     from rosetta.generation.module_generator import ModuleGenerator
 
+    _apply_model_overrides(llm_model, llm_base_url, embed_model, embed_base_url)
     settings = Settings()
     out_dir = Path(out)
+    debug_dir = Path(db).with_suffix("").parent
 
     if spec_json:
         click.echo(f"Loading ISASpec from {spec_json}")
+        extractor = ISAExtractor(db_path=db, settings=settings)
         spec = ISAExtractor.load(spec_json)
     else:
         click.echo(f"Extracting ISA from {db} ...")
         extractor = ISAExtractor(db_path=db, settings=settings)
-        spec = extractor.extract(max_concurrent=concurrency)
-        cache = Path(db).with_suffix("") .parent / f"{name}_isa_spec.json"
+        spec = extractor.extract(
+            max_concurrent=concurrency,
+            max_instructions=max_instructions,
+            max_pcode=max_pcode,
+            stop_after=stop_after,
+            filter_mnemonics=filter_mnemonics,
+            memory_warn_gb=memory_warn_gb,
+            debug_save_dir=debug_dir,
+            debug_prefix=name,
+        )
+
+        if stop_after:
+            partial_path = debug_dir / f"{name}_partial_{stop_after}.json"
+            extractor.save(spec, partial_path)
+            click.echo(f"Stopped after '{stop_after}' → {partial_path}")
+            if stop_after == "mnemonics":
+                mn_path = debug_dir / f"{name}_debug_pass3_mnemonics.json"
+                click.echo(f"Mnemonic list → {mn_path}")
+            return
+
+        cache = debug_dir / f"{name}_isa_spec.json"
         extractor.save(spec, cache)
         click.echo(f"ISASpec cached to {cache}")
 
-    click.echo(f"Generating processor module '{name}' → {out_dir} ...")
     generator = ModuleGenerator()
+
+    if append_slaspec:
+        target = Path(append_slaspec)
+        if not target.exists():
+            click.echo(f"Error: --append-slaspec target not found: {target}", err=True)
+            sys.exit(1)
+        n = generator.append_to_slaspec(spec, target)
+        click.echo(f"Appended {n} constructor(s) to {target}")
+        return
+
+    click.echo(f"Generating processor module '{name}' → {out_dir} ...")
     lang_dir = generator.generate(spec, name, out_dir)
     click.echo(f"Module written to {lang_dir}")
 
@@ -157,12 +251,15 @@ def validate(module_dir: str) -> None:
     required=True,
     help="Ghidra language ID (e.g. ARM:LE:32:v7) or path to a reference .slaspec",
 )
-def evaluate(module_dir: str, reference: str) -> None:
+@click.option("--embed-model", default=None, help="Override EMBED_MODEL env var")
+@click.option("--embed-base-url", default=None, help="Override EMBED_BASE_URL env var")
+def evaluate(module_dir: str, reference: str, embed_model: str | None, embed_base_url: str | None) -> None:
     """Semantic comparison of a generated spec against a Ghidra reference spec."""
     from rosetta.config import Settings
     from rosetta.evaluation.similarity import compare
     from rosetta.evaluation.spec_loader import load_ghidra_reference
 
+    _apply_model_overrides(None, None, embed_model, embed_base_url)
     settings = Settings()
 
     lang_dir = Path(module_dir)
@@ -209,11 +306,28 @@ def evaluate(module_dir: str, reference: str) -> None:
     default=False,
     help="Re-use cached isa_spec.json files when available",
 )
-def batch(manifest: str, out: str, skip_extraction: bool) -> None:
+@click.option("--target", default=None, help="Run only this manifest target ID (e.g. armv7)")
+@click.option("--concurrency", default=1, show_default=True, help="Max concurrent LLM calls in Pass 4")
+@click.option("--llm-model", default=None, help="Override LLM_MODEL env var (e.g. llama3:8b)")
+@click.option("--llm-base-url", default=None, help="Override LLM_BASE_URL env var")
+@click.option("--embed-model", default=None, help="Override EMBED_MODEL env var")
+@click.option("--embed-base-url", default=None, help="Override EMBED_BASE_URL env var")
+def batch(
+    manifest: str,
+    out: str,
+    skip_extraction: bool,
+    target: str | None,
+    concurrency: int,
+    llm_model: str | None,
+    llm_base_url: str | None,
+    embed_model: str | None,
+    embed_base_url: str | None,
+) -> None:
     """Run the full pipeline for every target in the manifest."""
     from rosetta.config import Settings
     from rosetta.evaluation.batch_eval import print_summary_table, run_batch
 
+    _apply_model_overrides(llm_model, llm_base_url, embed_model, embed_base_url)
     settings = Settings()
     results = run_batch(
         manifest_path=Path(manifest),
@@ -221,6 +335,8 @@ def batch(manifest: str, out: str, skip_extraction: bool) -> None:
         ghidra_home=settings.ghidra_home,
         settings=settings,
         skip_extraction=skip_extraction,
+        target_filter=target,
+        max_concurrent=concurrency,
     )
     print_summary_table(results)
     # Write JSON results
@@ -228,6 +344,151 @@ def batch(manifest: str, out: str, skip_extraction: bool) -> None:
     results_file.parent.mkdir(parents=True, exist_ok=True)
     results_file.write_text(json.dumps(results, indent=2))
     click.echo(f"Full results written to {results_file}")
+
+
+# ---------------------------------------------------------------------------
+# install  (copy generated module into Ghidra's Processors directory)
+# ---------------------------------------------------------------------------
+
+
+@cli.command()
+@click.argument("module_dir", type=click.Path(exists=True, file_okay=False))
+@click.option("--force", is_flag=True, default=False, help="Overwrite if already installed")
+def install(module_dir: str, force: bool) -> None:
+    """Install a generated processor module into Ghidra's Processors directory."""
+    import shutil
+    from rosetta.config import Settings
+
+    settings = Settings()
+    src = Path(module_dir)
+    proc_name = src.name
+    dest = settings.ghidra_home / "Ghidra" / "Processors" / proc_name
+
+    if dest.exists():
+        if not force:
+            click.echo(f"Already installed at {dest}. Use --force to overwrite.")
+            return
+        shutil.rmtree(dest)
+
+    shutil.copytree(src, dest)
+    click.echo(f"Installed {proc_name} → {dest}")
+
+    # Verify the .sla file exists (sleigh must have been run first)
+    lang_dir = dest / "data" / "languages"
+    sla_files = list(lang_dir.glob("*.sla"))
+    if not sla_files:
+        click.echo(
+            "WARNING: no .sla file found — run 'rosetta validate' first to compile the .slaspec.",
+            err=True,
+        )
+    else:
+        click.echo(f"  .sla file present: {sla_files[0].name}")
+
+
+# ---------------------------------------------------------------------------
+# load-test  (run Ghidra headless to verify the processor loads)
+# ---------------------------------------------------------------------------
+
+
+def _make_test_binary(path: Path, endian: str = "little") -> None:
+    """Write a minimal flat ARM binary (8 bytes) for headless import."""
+    import struct
+
+    fmt = "<I" if endian == "little" else ">I"
+    instructions = [
+        struct.pack(fmt, 0xE3A00001),   # MOV R0, #1
+        struct.pack(fmt, 0xE12FFF1E),   # BX LR
+    ]
+    path.write_bytes(b"".join(instructions))
+
+
+@cli.command("load-test")
+@click.argument("module_dir", type=click.Path(exists=True, file_okay=False))
+@click.option(
+    "--language-id",
+    default=None,
+    help="Ghidra language ID to use (auto-detected from .ldefs if omitted)",
+)
+@click.option(
+    "--endian",
+    default="little",
+    type=click.Choice(["little", "big"]),
+    help="Endianness for the test binary",
+)
+def load_test(module_dir: str, language_id: str | None, endian: str) -> None:
+    """Import a test binary into Ghidra headless using the installed processor.
+
+    Verifies that the generated processor module loads without errors.
+    Run 'rosetta install' and 'rosetta validate' first.
+    """
+    import re
+    import shutil
+    import tempfile
+    from rosetta.config import Settings
+    from rosetta.validation.headless_runner import run_headless
+
+    settings = Settings()
+    mod_dir = Path(module_dir)
+
+    # Auto-detect language ID from .ldefs
+    if language_id is None:
+        lang_dir = mod_dir / "data" / "languages"
+        ldefs_files = list(lang_dir.glob("*.ldefs"))
+        if not ldefs_files:
+            click.echo("No .ldefs found — cannot determine language ID", err=True)
+            sys.exit(1)
+        ldefs_text = ldefs_files[0].read_text()
+        m = re.search(r'id="([^"]+)"', ldefs_text)
+        if not m:
+            click.echo("Could not parse language ID from .ldefs", err=True)
+            sys.exit(1)
+        language_id = m.group(1)
+
+    click.echo(f"Language ID : {language_id}")
+
+    # Check the processor is installed in Ghidra
+    proc_name = mod_dir.name
+    installed = settings.ghidra_home / "Ghidra" / "Processors" / proc_name
+    if not installed.exists():
+        click.echo(
+            f"Processor not installed — run 'rosetta install {module_dir}' first.", err=True
+        )
+        sys.exit(1)
+
+    # Check .sla exists
+    lang_dir_installed = installed / "data" / "languages"
+    sla_files = list(lang_dir_installed.glob("*.sla"))
+    if not sla_files:
+        click.echo(
+            "No .sla file found in installed module — run 'rosetta validate' first.", err=True
+        )
+        sys.exit(1)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # Write tiny test binary
+        binary = Path(tmp) / "test.bin"
+        _make_test_binary(binary, endian=endian)
+        click.echo(f"Test binary : {binary} ({binary.stat().st_size} bytes)")
+
+        # Run headless
+        click.echo(f"Running Ghidra headless ...")
+        result = run_headless(
+            binary_path=binary,
+            language_id=language_id,
+            ghidra_home=settings.ghidra_home,
+            project_dir=Path(tmp),
+            project_name="rosetta_load_test",
+        )
+
+    if result.ok:
+        click.echo("PASS — processor loaded successfully")
+    else:
+        click.echo("FAIL — Ghidra returned a non-zero exit code", err=True)
+        # Surface the first relevant error line
+        for line in (result.stdout + result.stderr).splitlines():
+            if any(kw in line for kw in ("ERROR", "error", "Exception", "not found", "WARN")):
+                click.echo(f"  {line}", err=True)
+        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
