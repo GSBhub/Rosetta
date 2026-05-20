@@ -5,14 +5,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
 from docquery.config import Settings as DocSettings
-from docquery.embeddings.provider import get_embeddings
 from docquery.embeddings.llm import get_llm
-from docquery.pipeline.extractor import ExtractionPipeline
-from docquery.storage.vector_store import VectorStore
+from docquery._extractor import ExtractionPipeline
+from docquery._ingest import _build_chroma
 from pydantic import BaseModel
 
 from rosetta.extraction.schemas import (
@@ -43,29 +43,20 @@ class _RegisterList(BaseModel):
     registers: list[RegisterDef]
 
 
-def _probe_embedding_dim(settings: DocSettings) -> int:
-    """Return the actual embedding dimension for the configured model."""
-    embeddings = get_embeddings(settings)
-    return len(embeddings.embed_query("probe"))
-
-
-def _make_pipeline(db_path: str, output_model: Any, system_prompt: str, settings: DocSettings, embedding_dim: int | None = None) -> ExtractionPipeline:
-    dim = embedding_dim if embedding_dim is not None else _probe_embedding_dim(settings)
+def _make_pipeline(output_model: Any, system_prompt: str, settings: DocSettings) -> ExtractionPipeline:
+    _build_chroma(settings)
     return ExtractionPipeline(
-        db_path=db_path,
         output_model=output_model,
         system_prompt=system_prompt,
-        embedding_dim=dim,
         settings=settings,
     )
 
 
 async def _extract_instruction_async(
     mnemonic: str,
-    db_path: str,
     settings: DocSettings,
     semaphore: asyncio.Semaphore,
-    embedding_dim: int | None = None,
+    executor: ThreadPoolExecutor,
 ) -> InstructionDef:
     async with semaphore:
         query = (
@@ -76,10 +67,7 @@ async def _extract_instruction_async(
         )
 
         def _run_sync() -> InstructionDef:
-            # Pipeline (and its SQLite connection) must be created inside the
-            # executor thread — SQLite connections cannot be shared across threads.
             pipeline = _make_pipeline(
-                db_path=db_path,
                 output_model=InstructionDef,
                 system_prompt=(
                     "You are an expert ISA analyst. Extract precise encoding details for the "
@@ -88,7 +76,6 @@ async def _extract_instruction_async(
                     "Return only JSON matching the schema."
                 ),
                 settings=settings,
-                embedding_dim=embedding_dim,
             )
             result = pipeline.run(query)
             if isinstance(result, InstructionDef):
@@ -100,7 +87,7 @@ async def _extract_instruction_async(
             )
 
         try:
-            return await asyncio.get_event_loop().run_in_executor(None, _run_sync)
+            return await asyncio.get_event_loop().run_in_executor(executor, _run_sync)
         except Exception as exc:
             log.warning("Failed to extract %s: %s", mnemonic, exc)
             return InstructionDef(
@@ -132,13 +119,7 @@ class ISAExtractor:
     def __init__(self, db_path: str | Path, settings: DocSettings | None = None):
         self.db_path = str(db_path)
         self.settings = settings or DocSettings()
-        self._embedding_dim: int | None = None  # probed once on first use
-
-    def _get_embedding_dim(self) -> int:
-        if self._embedding_dim is None:
-            self._embedding_dim = _probe_embedding_dim(self.settings)
-            log.info("Embedding dimension: %d", self._embedding_dim)
-        return self._embedding_dim
+        self.settings.db_path = self.db_path
 
     # ------------------------------------------------------------------
     # Public API
@@ -152,8 +133,11 @@ class ISAExtractor:
         stop_after: str | None = None,
         filter_mnemonics: str | None = None,
         memory_warn_gb: float = 2.0,
+        chunk_size: int | None = None,
         debug_save_dir: Path | None = None,
         debug_prefix: str = "debug",
+        resume: bool = False,
+        inter_chunk_sleep: float = 0.0,
     ) -> ISASpec:
         """Run extraction passes and return an ISASpec.
 
@@ -161,6 +145,7 @@ class ISAExtractor:
         filter_mnemonics: comma-separated glob patterns to keep (e.g. "MOV*,ADD,SUB*").
         max_pcode: generate P-code for only the first N instructions in pass 5.
         debug_save_dir: write per-pass JSON snapshots here for post-mortem inspection.
+        resume: if True, read the existing pass-4 partial JSONL and skip already-done mnemonics.
         """
         from rosetta.utils.memory_guard import check_memory_headroom, log_memory
 
@@ -200,14 +185,37 @@ class ISAExtractor:
         if stop_after == "mnemonics":
             return ISASpec(meta=meta, registers=registers)
 
+        # Stub mode: skip pass 4 LLM extraction entirely.  Every discovered mnemonic
+        # becomes a minimal InstructionDef with encoding_bits=32 and no bit fields.
+        # This gives maximum mnemonic coverage (≡ pass-3 yield) in seconds rather
+        # than hours, at the cost of having no per-instruction semantic detail.
+        if stop_after == "stubs":
+            stubs = [
+                InstructionDef(mnemonic=m, encoding_bits=32, semantics=f"Auto-generated stub for {m}.")
+                for m in mnemonics
+            ]
+            if debug_save_dir:
+                self._save_debug(
+                    ISASpec(meta=meta, registers=registers, instructions=stubs),
+                    debug_save_dir / f"{debug_prefix}_debug_pass3_stubs.json",
+                )
+            return ISASpec(meta=meta, registers=registers, instructions=stubs)
+
         if max_instructions and len(mnemonics) > max_instructions:
             log.info("Capping at %d instructions (--max-instructions)", max_instructions)
             mnemonics = mnemonics[:max_instructions]
 
-        chunk_save = (debug_save_dir / f"{debug_prefix}_debug_pass4_partial.json") if debug_save_dir else None
+        chunk_save = (debug_save_dir / f"{debug_prefix}_debug_pass4_partial.jsonl") if debug_save_dir else None
+        resume_from = chunk_save if resume else None
         log.info("Pass 4: extracting per-instruction details (concurrency=%d)", max_concurrent)
         instructions = asyncio.run(
-            self._pass4_instructions(mnemonics, max_concurrent, memory_warn_gb, chunk_save_path=chunk_save)
+            self._pass4_instructions(
+                mnemonics, max_concurrent, memory_warn_gb,
+                chunk_size=chunk_size,
+                chunk_save_path=chunk_save,
+                resume_from=resume_from,
+                inter_chunk_sleep=inter_chunk_sleep,
+            )
         )
         log_memory("after-pass4")
         if debug_save_dir:
@@ -250,14 +258,12 @@ class ISAExtractor:
 
     def _pass1_meta(self) -> ISAMeta:
         pipeline = _make_pipeline(
-            db_path=self.db_path,
             output_model=ISAMeta,
             system_prompt=(
                 "You are an expert ISA analyst. Extract the ISA metadata. "
                 "Return only JSON matching the schema."
             ),
             settings=self.settings,
-            embedding_dim=self._get_embedding_dim(),
         )
         result = pipeline.run(
             "What is the endianness (little or big), native word size in bits, "
@@ -274,14 +280,12 @@ class ISAExtractor:
 
     def _pass2_registers(self) -> list[RegisterDef]:
         pipeline = _make_pipeline(
-            db_path=self.db_path,
             output_model=_RegisterList,
             system_prompt=(
                 "You are an expert ISA analyst. List all programmer-visible registers. "
                 "Return only JSON matching the schema."
             ),
             settings=self.settings,
-            embedding_dim=self._get_embedding_dim(),
         )
         result = pipeline.run(
             "List every programmer-visible register: canonical name, any aliases, "
@@ -293,41 +297,64 @@ class ISAExtractor:
 
     def _pass3_mnemonics(self) -> list[str]:
         from rosetta.extraction.mnemonic_discovery import discover_mnemonics
-        return discover_mnemonics(self.db_path, self.settings, self._get_embedding_dim())
+        return discover_mnemonics(self.db_path, self.settings)
 
     async def _pass4_instructions(
         self,
         mnemonics: list[str],
         max_concurrent: int,
         memory_warn_gb: float = 2.0,
-        chunk_size: int = 20,
+        chunk_size: int | None = None,
         chunk_save_path: Path | None = None,
+        resume_from: Path | None = None,
+        inter_chunk_sleep: float = 0.0,
     ) -> list[InstructionDef]:
         import gc
         from rosetta.utils.memory_guard import check_memory_headroom, log_memory
 
+        effective_chunk_size = chunk_size if chunk_size is not None else max_concurrent
         semaphore = asyncio.Semaphore(max_concurrent)
-        dim = self._get_embedding_dim()
         results: list[InstructionDef] = []
 
-        for i in range(0, len(mnemonics), chunk_size):
-            chunk = mnemonics[i : i + chunk_size]
-            log.info(
-                "Pass 4: instructions %d–%d / %d",
-                i + 1,
-                i + len(chunk),
-                len(mnemonics),
-            )
-            check_memory_headroom(min_free_gb=memory_warn_gb)
-            tasks = [
-                _extract_instruction_async(m, self.db_path, self.settings, semaphore, dim)
-                for m in chunk
-            ]
-            chunk_results = await asyncio.gather(*tasks)
-            results.extend(chunk_results)
-            gc.collect()
-            log_memory(f"pass4-chunk-{i // chunk_size}")
-            if chunk_save_path:
-                chunk_save_path.write_text(json.dumps([r.model_dump() for r in results], indent=2))
+        # Resume: load already-extracted instructions and skip their mnemonics.
+        if resume_from and resume_from.exists():
+            seen: dict[str, InstructionDef] = {}
+            for line in resume_from.read_text().splitlines():
+                line = line.strip()
+                if line:
+                    instr = InstructionDef.model_validate_json(line)
+                    seen[instr.mnemonic.upper()] = instr
+            results = list(seen.values())
+            before = len(mnemonics)
+            mnemonics = [m for m in mnemonics if m.upper() not in seen]
+            log.info("Resuming pass 4: %d already done, %d remaining", before - len(mnemonics), len(mnemonics))
+        elif chunk_save_path:
+            chunk_save_path.write_text("")
+            log.info("Partial save (JSONL) → %s", chunk_save_path)
+
+        with ThreadPoolExecutor(max_workers=max_concurrent) as executor:
+            for i in range(0, len(mnemonics), effective_chunk_size):
+                chunk = mnemonics[i : i + effective_chunk_size]
+                log.info(
+                    "Pass 4: instructions %d–%d / %d remaining",
+                    i + 1,
+                    i + len(chunk),
+                    len(mnemonics),
+                )
+                check_memory_headroom(min_free_gb=memory_warn_gb)
+                tasks = [
+                    _extract_instruction_async(m, self.settings, semaphore, executor)
+                    for m in chunk
+                ]
+                chunk_results = await asyncio.gather(*tasks)
+                results.extend(chunk_results)
+                gc.collect()
+                log_memory(f"pass4-chunk-{i // effective_chunk_size}")
+                if chunk_save_path:
+                    with chunk_save_path.open("a") as f:
+                        for r in chunk_results:
+                            f.write(r.model_dump_json() + "\n")
+                if inter_chunk_sleep > 0:
+                    await asyncio.sleep(inter_chunk_sleep)
 
         return results

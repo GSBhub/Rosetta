@@ -1,14 +1,14 @@
 # Rosetta
 
-Rosetta ingests an ISA reference manual (PDF) into a RAG database, runs a five-pass LLM extraction pipeline to produce a structured `ISASpec`, renders that spec into Ghidra SLEIGH processor module files, and evaluates the output against Ghidra's built-in reference specs.
+Rosetta ingests an ISA reference manual (PDF) into a ChromaDB vector store, runs a LangGraph extraction pipeline to produce a structured `ISASpec`, renders that spec into Ghidra SLEIGH processor module files, and evaluates the output against Ghidra's built-in reference specs.
 
 ```
 PDF manual
     │  rosetta ingest
     ▼
-docquery SQLite DB
+ChromaDB vector store
     │  rosetta generate (or rosetta batch)
-    ▼
+    ▼  (LangGraph StateGraph — meta/registers/mnemonics in parallel)
 ISASpec JSON  ──────────────────────────────────────────────────────────────┐
     │                                                                        │
     ▼                                                                        │
@@ -28,10 +28,10 @@ Requires Python 3.12+ and [uv](https://github.com/astral-sh/uv).
 ```bash
 git clone <repo>
 cd rosetta
-uv pip install -e .
+uv sync      # installs all workspace packages + docquery from git
 ```
 
-`docquery` is pulled from GitHub automatically as a direct dependency.
+This is a **uv workspace** — `uv sync` resolves all packages under `packages/` together with a single lockfile. `docquery` is pulled from GitHub automatically.
 
 ## Environment
 
@@ -57,26 +57,27 @@ Ghidra and the JDK can be placed under `tools/` (gitignored). The CLI auto-prepe
 
 ## CLI
 
-### `rosetta ingest` — PDF → RAG database
+### `rosetta ingest` — PDF → ChromaDB vector store
 
 ```bash
-rosetta ingest manuals/armv7_ref.pdf --db dbs/armv7.db
+rosetta ingest manuals/armv7_ref.pdf --db dbs/armv7
 ```
 
-Loads the PDF with `docquery`'s table-aware loader (pdfplumber), chunks it, embeds the chunks, and writes a SQLite vector store.
+`--db` is a **directory** (ChromaDB). Loads the PDF with `docquery`'s table-aware loader, chunks it, embeds the chunks, and writes to a ChromaDB persistent store. Re-ingesting the same file adds 0 new chunks (content-hash deduplication).
 
 ### `rosetta generate` — extract ISA + generate processor module
 
 ```bash
-rosetta generate --db dbs/armv7.db --name ARM_v7_generated --out ./output
+rosetta generate --db dbs/armv7 --name ARM_v7_generated --out ./output
 ```
 
-Runs the five-pass extraction pipeline against the database, serializes the result to `*_isa_spec.json`, then renders the Ghidra module files.
+Invokes the compiled LangGraph pipeline: after ingestion, **meta / registers / mnemonics** run in parallel, then fan in to instruction extraction, P-code generation, and SLEIGH rendering. Serializes the `ISASpec` to `*_isa_spec.json` alongside the output files.
 
 Options:
 - `--spec-json PATH` — skip extraction, load a cached `isa_spec.json` directly
-- `--concurrency N` — max concurrent LLM calls during Pass 4 (default 4; use 1 on RAM-constrained systems)
+- `--concurrency N` — max concurrent LLM calls during instruction extraction (default 4; use 1 on RAM-constrained systems)
 - `--max-instructions N` — cap extraction at N instructions (useful for smoke tests)
+- `--stop-after STAGE` — stop early after `meta`, `registers`, `mnemonics`, `stubs`, or `instructions`
 
 ### `rosetta validate` — compile `.slaspec` with Ghidra's SLEIGH compiler
 
@@ -145,19 +146,31 @@ rosetta graph --results ./output/batch_results.json
 rosetta graph --slaspec ./output/ARM_v7_generated/data/languages/ARM_v7_generated.slaspec
 ```
 
-## Extraction Pipeline
+## Pipeline Architecture
 
-`ISAExtractor.extract()` runs five sequential passes against the docquery vector store:
+`rosetta generate` compiles and invokes a `StateGraph[PipelineState]` (see `src/rosetta/graph.py`).
+The pipeline is split across nine uv packages under `packages/`:
 
-| Pass | Output | Description |
-|------|--------|-------------|
-| 1 | `ISAMeta` | Endianness, word size, alignment, instruction widths |
-| 2 | `list[RegisterDef]` | Register names, aliases, sizes, roles |
-| 3 | `list[str]` | Full mnemonic list via a LangGraph multi-strategy discovery loop |
-| 4 | `list[InstructionDef]` | Per-instruction encoding, bit fields, operands, semantics — run concurrently |
-| 5 | P-code hints | LLM translates each instruction's semantics into a SLEIGH P-code statement |
+```
+START → ingest → ┌─ meta ──────────┐
+                 ├─ registers ─────┤→ instructions → pcode → generate_sla → validate_sla → evaluate_sla → END
+                 └─ mnemonics ─────┘
+                   (parallel)         (fan-in barrier)
+```
 
-Pass 3 uses a LangGraph state machine with 10 query strategies (data-processing, memory, branch, float, SIMD, system, …) and loops until 90% mnemonic coverage or convergence, replacing the original single-query approach that found only ~10% of ARM instructions.
+| Node | Package | Output |
+|------|---------|--------|
+| `ingest` | `rosetta-ingest` | ChromaDB populated |
+| `meta` | `rosetta-meta` | `ISAMeta` — endianness, word size, alignment, instruction widths |
+| `registers` | `rosetta-registers` | `list[RegisterDef]` — names, aliases, sizes, roles |
+| `mnemonics` | `rosetta-mnemonics` | `list[str]` — full mnemonic list via inner LangGraph multi-strategy loop |
+| `instructions` | `rosetta-instructions` | `list[InstructionDef]` — encoding, bit fields, operands, semantics (async concurrent) |
+| `pcode` | `rosetta-pcode` | `pcode_hint` on each instruction — direct LLM call |
+| `generate_sla` | `rosetta-generate-sla` | `.slaspec`, `.pspec`, `.cspec`, `.ldefs` via Jinja2 |
+| `validate_sla` | `rosetta-validate-sla` | `compile_ok`, `compile_errors` — Ghidra sleigh subprocess |
+| `evaluate_sla` | `rosetta-evaluate-sla` | `semantic_similarity`, `instruction_coverage`, `register_overlap` |
+
+The mnemonic node uses a LangGraph inner graph with 10 query strategies (data-processing, memory, branch, multiply, alpha A–F, alpha G–N, alpha O–Z, SIMD/VFP, system/coprocessor) to find the full instruction set — a single-query approach typically finds only ~10% of ARM instructions.
 
 The `ISASpec` (meta + registers + instructions) is serialised to `*_isa_spec.json` and can be reloaded to skip re-extraction on subsequent runs.
 
@@ -195,7 +208,7 @@ targets:
   - id: armv7
     name: ARM_v7_generated
     manual: manuals/armv7_ref.pdf
-    db: dbs/armv7.db
+    db: dbs/armv7        # ChromaDB directory (no .db extension)
     ghidra_reference_lang: ARM:LE:32:v7
     reference_slaspec: $GHIDRA_HOME/Ghidra/Processors/ARM/data/languages/ARM7_le.slaspec
 ```
@@ -205,9 +218,13 @@ targets:
 ## Development
 
 ```bash
-uv run pytest                          # all tests
-uv run pytest tests/test_schemas.py   # single file
-uv run pytest -k "test_generate"      # by name
+uv run pytest tests/     # root package tests (59 tests, no external services)
+uv run pytest packages/  # all workspace node package tests (100 tests, all mocked)
+uv run pytest tests/ packages/          # everything
+uv run pytest -k "test_generate"        # by name
+uv run pytest packages/rosetta-mnemonics/tests/ -v  # single package
 ```
 
-Tests that require a live Ghidra installation are guarded by `requires_ghidra` and skipped if `GHIDRA_HOME` is unset.
+Tests that require a live Ghidra installation are guarded by `requires_ghidra` and skipped if `GHIDRA_HOME` is unset. No other external services (Ollama, ChromaDB) are required — all are mocked.
+
+See `docs/data-flow.md` for a full diagram of node connections and `PipelineState` key contracts.

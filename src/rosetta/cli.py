@@ -75,36 +75,67 @@ def cli() -> None:
 
 
 @cli.command()
-@click.argument("manual", type=click.Path(exists=True, dir_okay=False))
+@click.argument("manual", type=click.Path(exists=True))
 @click.option("--db", required=True, help="Output docquery SQLite database path")
+@click.option("--source", is_flag=True, default=False,
+    help="Ingest source code files instead of a PDF. MANUAL must be a directory; "
+         "all .c, .h, .py, .cpp, .hpp files are loaded as text chunks.")
 @click.option("--embed-model", default=None, help="Override EMBED_MODEL env var")
 @click.option("--embed-base-url", default=None, help="Override EMBED_BASE_URL env var")
-def ingest(manual: str, db: str, embed_model: str | None, embed_base_url: str | None) -> None:
-    """Ingest a PDF manual into a docquery RAG database."""
+def ingest(manual: str, db: str, source: bool, embed_model: str | None, embed_base_url: str | None) -> None:
+    """Ingest a PDF manual (or source code directory) into a docquery RAG database.
+
+    Run multiple times against the same --db to supplement an existing database
+    with additional manuals — content is deduplicated by hash so there are no
+    duplicate chunks.  Use this when pass 3 mnemonic discovery reports low
+    coverage and the primary manual does not document all instructions.
+    """
+    import docquery
     from docquery.config import Settings
-    from docquery.ingestion.chunker import chunk
-    from docquery.ingestion.pdf_loader import load
-    from docquery.embeddings.provider import get_embeddings
-    from docquery.storage.vector_store import VectorStore
 
     _apply_model_overrides(None, None, embed_model, embed_base_url)
     settings = Settings()
-    click.echo(f"Loading {manual} ...")
-    docs = load(manual)
-    chunks = chunk(docs, settings)
-    click.echo(f"  {len(docs)} pages → {len(chunks)} chunks")
+    settings.db_path = db
 
-    embeddings = get_embeddings(settings)
-    dim = len(embeddings.embed_query("probe"))
-    vs = VectorStore(db, embedding_dim=dim)
-    vs.add_chunks(chunks, embeddings, batch_size=settings.embed_batch_size)
-    vs.close()
-    click.echo(f"Ingested into {db}")
+    src = Path(manual)
+    if source:
+        if not src.is_dir():
+            click.echo(f"Error: --source requires a directory, got {manual}", err=True)
+            sys.exit(1)
+        exts = ("*.c", "*.h", "*.cpp", "*.hpp", "*.py")
+        src_files = [str(f) for ext in exts for f in sorted(src.rglob(ext))]
+        if not src_files:
+            click.echo(f"No source files found in {src}", err=True)
+            sys.exit(1)
+        click.echo(f"Ingesting {len(src_files)} source files from {src} ...")
+        items = src_files
+    else:
+        click.echo(f"Ingesting {manual} ...")
+        items = [str(src)]
+
+    n = docquery.ingest(items, settings=settings)
+    click.echo(f"Ingested {n} document(s) into {db}")
 
 
 # ---------------------------------------------------------------------------
 # generate
 # ---------------------------------------------------------------------------
+
+
+def _generate_or_append(spec, name: str, out_dir: Path, append_slaspec: str | None) -> None:
+    from rosetta.generation.module_generator import ModuleGenerator
+    generator = ModuleGenerator()
+    if append_slaspec:
+        target = Path(append_slaspec)
+        if not target.exists():
+            click.echo(f"Error: --append-slaspec target not found: {target}", err=True)
+            sys.exit(1)
+        n = generator.append_to_slaspec(spec, target)
+        click.echo(f"Appended {n} constructor(s) to {target}")
+    else:
+        click.echo(f"Generating processor module '{name}' → {out_dir} ...")
+        lang_dir = generator.generate(spec, name, out_dir)
+        click.echo(f"Module written to {lang_dir}")
 
 
 @cli.command()
@@ -116,13 +147,18 @@ def ingest(manual: str, db: str, embed_model: str | None, embed_base_url: str | 
 @click.option("--max-instructions", default=None, type=int, help="Cap number of instructions extracted (useful for quick tests)")
 @click.option("--max-pcode", default=None, type=int, help="Limit P-code generation (pass 5) to first N instructions")
 @click.option("--stop-after", default=None,
-    type=click.Choice(["meta", "registers", "mnemonics", "instructions"]),
-    help="Stop extraction after this pass and skip Ghidra file generation")
+    type=click.Choice(["meta", "registers", "mnemonics", "stubs", "instructions"]),
+    help="Stop extraction after this pass. 'stubs' creates minimal InstructionDefs "
+         "for all discovered mnemonics (no per-instruction LLM calls) — fast path "
+         "to maximum mnemonic coverage.")
 @click.option("--filter-mnemonics", default=None,
     help="Comma-separated glob patterns to keep after pass 3, e.g. 'MOV*,ADD,SUB*'")
 @click.option("--append-slaspec", default=None, type=click.Path(),
     help="Append new instruction constructors to this .slaspec instead of generating a full module")
+@click.option("--chunk-size", default=None, type=int, help="Instructions per asyncio.gather() batch in pass 4. Defaults to --concurrency.")
 @click.option("--memory-warn-gb", default=2.0, show_default=True, help="Warn when free system RAM falls below this threshold (GB)")
+@click.option("--inter-chunk-sleep", default=0.0, show_default=True, help="Seconds to sleep between pass-4 chunks (use 2.0 for local Ollama to allow KV-cache GC)")
+@click.option("--resume", is_flag=True, default=False, help="Resume pass 4 from an existing partial JSONL save (skips already-extracted mnemonics)")
 @click.option("--llm-model", default=None, help="Override LLM_MODEL env var (e.g. llama3:8b)")
 @click.option("--llm-base-url", default=None, help="Override LLM_BASE_URL env var")
 @click.option("--embed-model", default=None, help="Override EMBED_MODEL env var")
@@ -138,67 +174,90 @@ def generate(
     stop_after: str | None,
     filter_mnemonics: str | None,
     append_slaspec: str | None,
+    chunk_size: int | None,
     memory_warn_gb: float,
+    inter_chunk_sleep: float,
+    resume: bool,
     llm_model: str | None,
     llm_base_url: str | None,
     embed_model: str | None,
     embed_base_url: str | None,
 ) -> None:
     """Extract ISA from database and generate a Ghidra processor module."""
+    import dataclasses
+    import json as _json
     from rosetta.config import Settings
-    from rosetta.extraction.isa_extractor import ISAExtractor
-    from rosetta.generation.module_generator import ModuleGenerator
+    from rosetta.graph import build_compiled_graph
+    from rosetta_schemas.state import get_isa_spec
 
     _apply_model_overrides(llm_model, llm_base_url, embed_model, embed_base_url)
     settings = Settings()
+    settings.db_path = db
     out_dir = Path(out)
-    debug_dir = Path(db).with_suffix("").parent
+    debug_dir = Path(db).parent
 
+    # ── Fast paths that bypass the LangGraph pipeline ──────────────────────
     if spec_json:
         click.echo(f"Loading ISASpec from {spec_json}")
-        extractor = ISAExtractor(db_path=db, settings=settings)
-        spec = ISAExtractor.load(spec_json)
-    else:
-        click.echo(f"Extracting ISA from {db} ...")
-        extractor = ISAExtractor(db_path=db, settings=settings)
-        spec = extractor.extract(
-            max_concurrent=concurrency,
-            max_instructions=max_instructions,
-            max_pcode=max_pcode,
-            stop_after=stop_after,
-            filter_mnemonics=filter_mnemonics,
-            memory_warn_gb=memory_warn_gb,
-            debug_save_dir=debug_dir,
-            debug_prefix=name,
-        )
-
-        if stop_after:
-            partial_path = debug_dir / f"{name}_partial_{stop_after}.json"
-            extractor.save(spec, partial_path)
-            click.echo(f"Stopped after '{stop_after}' → {partial_path}")
-            if stop_after == "mnemonics":
-                mn_path = debug_dir / f"{name}_debug_pass3_mnemonics.json"
-                click.echo(f"Mnemonic list → {mn_path}")
-            return
-
-        cache = debug_dir / f"{name}_isa_spec.json"
-        extractor.save(spec, cache)
-        click.echo(f"ISASpec cached to {cache}")
-
-    generator = ModuleGenerator()
-
-    if append_slaspec:
-        target = Path(append_slaspec)
-        if not target.exists():
-            click.echo(f"Error: --append-slaspec target not found: {target}", err=True)
-            sys.exit(1)
-        n = generator.append_to_slaspec(spec, target)
-        click.echo(f"Appended {n} constructor(s) to {target}")
+        from rosetta_schemas.models import ISASpec
+        spec = ISASpec.model_validate(_json.loads(Path(spec_json).read_text()))
+        _generate_or_append(spec, name, out_dir, append_slaspec)
         return
 
-    click.echo(f"Generating processor module '{name}' → {out_dir} ...")
-    lang_dir = generator.generate(spec, name, out_dir)
-    click.echo(f"Module written to {lang_dir}")
+    # ── Build initial pipeline state ────────────────────────────────────────
+    settings_dict = dataclasses.asdict(settings)
+    initial_state: dict = {
+        "db_path": db,
+        "settings_dict": settings_dict,
+        "processor_name": name,
+        "out_dir": str(out_dir),
+        "max_concurrent": concurrency,
+        "max_instructions": max_instructions,
+        "max_pcode": max_pcode,
+        "stop_after": stop_after,
+        "filter_mnemonics": filter_mnemonics,
+        "chunk_size": chunk_size,
+        "memory_warn_gb": memory_warn_gb,
+        "inter_chunk_sleep": inter_chunk_sleep,
+        "resume": resume,
+        "debug_save_dir": str(debug_dir),
+        "errors": [],
+    }
+
+    click.echo(f"Extracting ISA from {db} ...")
+    compiled = build_compiled_graph()
+    final_state = compiled.invoke(initial_state)
+
+    for err in final_state.get("errors", []):
+        click.echo(f"Warning: {err}", err=True)
+
+    # ── Handle stop_after ───────────────────────────────────────────────────
+    if stop_after and stop_after not in ("stubs", "instructions"):
+        spec = get_isa_spec(final_state)
+        if spec:
+            partial_path = debug_dir / f"{name}_partial_{stop_after}.json"
+            partial_path.write_text(spec.model_dump_json(indent=2))
+            click.echo(f"Stopped after '{stop_after}' → {partial_path}")
+        else:
+            click.echo(f"Stopped after '{stop_after}' (no spec to save)")
+        return
+
+    # ── Cache ISASpec ───────────────────────────────────────────────────────
+    spec = get_isa_spec(final_state)
+    if spec:
+        cache = debug_dir / f"{name}_isa_spec.json"
+        cache.write_text(spec.model_dump_json(indent=2))
+        click.echo(f"ISASpec cached to {cache}")
+
+    # ── Report generation result ────────────────────────────────────────────
+    lang_dir = final_state.get("lang_dir")
+    if lang_dir:
+        click.echo(f"Module written to {lang_dir}")
+    elif not stop_after:
+        click.echo("Warning: no output module was generated", err=True)
+
+    if append_slaspec and spec:
+        _generate_or_append(spec, name, out_dir, append_slaspec)
 
 
 # ---------------------------------------------------------------------------

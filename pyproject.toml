@@ -3,16 +3,26 @@ name = "rosetta"
 version = "0.1.0"
 description = "ISA manual → Ghidra processor module generator"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.14"
 dependencies = [
+    "rosetta-schemas",
+    "rosetta-utils",
+    "rosetta-ingest",
+    "rosetta-meta",
+    "rosetta-registers",
+    "rosetta-mnemonics",
+    "rosetta-instructions",
+    "rosetta-pcode",
+    "rosetta-generate-sla",
+    "rosetta-validate-sla",
+    "rosetta-evaluate-sla",
     "docquery @ git+https://github.com/gsbhub/docquery",
-    "jinja2>=3.1",
     "click>=8.1",
     "pydantic>=2.0",
     "pyyaml>=6.0",
-    "matplotlib>=3.8",
     "psutil>=5.9",
     "pytest>=9.0.3",
+    "langgraph>=0.2",
     "langchain-anthropic>=0.3",
 ]
 
@@ -32,3 +42,19 @@ allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/rosetta"]
+
+[tool.uv.workspace]
+members = ["packages/*", "."]
+
+[tool.uv.sources]
+rosetta-schemas      = { workspace = true }
+rosetta-utils        = { workspace = true }
+rosetta-ingest       = { workspace = true }
+rosetta-meta         = { workspace = true }
+rosetta-registers    = { workspace = true }
+rosetta-mnemonics    = { workspace = true }
+rosetta-instructions = { workspace = true }
+rosetta-pcode        = { workspace = true }
+rosetta-generate-sla = { workspace = true }
+rosetta-validate-sla = { workspace = true }
+rosetta-evaluate-sla = { workspace = true }
