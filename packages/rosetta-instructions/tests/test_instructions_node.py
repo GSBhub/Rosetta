@@ -8,7 +8,7 @@ from rosetta_instructions.node import instructions_node
 
 # Both are deferred imports; patch at their source modules.
 _PATCH_EXTRACT = "rosetta_instructions.extractor.extract_instruction_async"
-_PATCH_CHROMA = "rosetta_utils.chroma.get_chroma_collection"
+_PATCH_CHROMA = "rosetta_utils.chroma.get_chroma_wrapper"
 
 
 def _instr(mnemonic: str, **kwargs) -> InstructionDef:

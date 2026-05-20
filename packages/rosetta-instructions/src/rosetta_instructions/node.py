@@ -58,10 +58,10 @@ async def _instructions_async(state: PipelineState) -> dict[str, Any]:
         chunk_save_path = Path(debug_save_dir) / "pass4_partial.jsonl"
 
     try:
-        from rosetta_utils.chroma import get_chroma_collection
+        from rosetta_utils.chroma import get_chroma_wrapper
         settings = Settings(**(state.get("settings_dict") or {}))
         settings.db_path = state["db_path"]
-        settings.vs = get_chroma_collection(settings.db_path)
+        settings.vs = get_chroma_wrapper(settings.db_path, settings)
 
         results: list[InstructionDef] = []
 

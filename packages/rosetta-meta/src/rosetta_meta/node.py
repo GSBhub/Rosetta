@@ -30,12 +30,12 @@ def meta_node(state: PipelineState) -> dict[str, Any]:
     """Extract ISAMeta via RAG ExtractionPipeline."""
     import docquery
     from docquery.config import Settings
-    from rosetta_utils.chroma import get_chroma_collection
+    from rosetta_utils.chroma import get_chroma_wrapper
 
     try:
         settings = Settings(**(state.get("settings_dict") or {}))
         settings.db_path = state["db_path"]
-        settings.vs = get_chroma_collection(settings.db_path)
+        settings.vs = get_chroma_wrapper(settings.db_path, settings)
         result = docquery.query(_QUERY, schema=ISAMeta, system_prompt=_SYSTEM_PROMPT, settings=settings)
         if isinstance(result, ISAMeta):
             log.info("meta_node: extracted ISAMeta name=%r endian=%s", result.name, result.endian)

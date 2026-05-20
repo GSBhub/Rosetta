@@ -6,7 +6,7 @@ from rosetta_schemas.models import ISAMeta
 
 from rosetta_meta.node import meta_node
 
-_PATCH_CHROMA = "rosetta_utils.chroma.get_chroma_collection"
+_PATCH_CHROMA = "rosetta_utils.chroma.get_chroma_wrapper"
 
 
 def _state(**kwargs):

@@ -6,7 +6,7 @@ from rosetta_schemas.models import RegisterDef
 
 from rosetta_registers.node import registers_node, _RegisterList
 
-_PATCH_CHROMA = "rosetta_utils.chroma.get_chroma_collection"
+_PATCH_CHROMA = "rosetta_utils.chroma.get_chroma_wrapper"
 
 
 def _state(**kwargs):

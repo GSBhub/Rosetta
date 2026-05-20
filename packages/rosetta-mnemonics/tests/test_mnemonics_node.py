@@ -6,7 +6,7 @@ from rosetta_mnemonics.node import mnemonics_node
 
 # discover_mnemonics is imported inside mnemonics_node; patch at its source module.
 _PATCH = "rosetta_mnemonics.discovery.discover_mnemonics"
-_PATCH_CHROMA = "rosetta_utils.chroma.get_chroma_collection"
+_PATCH_CHROMA = "rosetta_utils.chroma.get_chroma_wrapper"
 
 
 def _state(**kwargs):

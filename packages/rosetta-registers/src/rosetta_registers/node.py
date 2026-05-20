@@ -36,12 +36,12 @@ def registers_node(state: PipelineState) -> dict[str, Any]:
     """Extract list[RegisterDef] via RAG ExtractionPipeline."""
     import docquery
     from docquery.config import Settings
-    from rosetta_utils.chroma import get_chroma_collection
+    from rosetta_utils.chroma import get_chroma_wrapper
 
     try:
         settings = Settings(**(state.get("settings_dict") or {}))
         settings.db_path = state["db_path"]
-        settings.vs = get_chroma_collection(settings.db_path)
+        settings.vs = get_chroma_wrapper(settings.db_path, settings)
         result = docquery.query(_QUERY, schema=_RegisterList, system_prompt=_SYSTEM_PROMPT, settings=settings)
         if isinstance(result, _RegisterList):
             log.info("registers_node: found %d registers", len(result.registers))

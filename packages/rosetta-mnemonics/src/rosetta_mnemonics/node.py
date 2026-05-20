@@ -19,13 +19,13 @@ def mnemonics_node(state: PipelineState) -> dict[str, Any]:
     """Discover all instruction mnemonics via the inner LangGraph multi-strategy loop."""
     from docquery.config import Settings
     from rosetta_mnemonics.discovery import discover_mnemonics
-    from rosetta_utils.chroma import get_chroma_collection
+    from rosetta_utils.chroma import get_chroma_wrapper
 
     try:
         settings = Settings(**(state.get("settings_dict") or {}))
         db_path = state["db_path"]
         settings.db_path = db_path
-        settings.vs = get_chroma_collection(db_path)
+        settings.vs = get_chroma_wrapper(db_path, settings)
         mnemonics = discover_mnemonics(
             db_path=db_path,
             settings=settings,
