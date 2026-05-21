@@ -7,10 +7,7 @@ from pathlib import Path
 
 
 def load_slaspec_text(slaspec_path: Path, _visited: set[Path] | None = None) -> str:
-    """
-    Read a .slaspec (and all recursively @include'd .sinc files) as a single text blob.
-    Handles multi-level include chains like ARM7_le.slaspec → ARM.sinc → ARMinstructions.sinc.
-    """
+    """Read a .slaspec (and all recursively @include'd .sinc files) as a single text blob."""
     if _visited is None:
         _visited = set()
     canonical = slaspec_path.resolve()
@@ -29,6 +26,19 @@ def load_slaspec_text(slaspec_path: Path, _visited: set[Path] | None = None) -> 
             extra.append(load_slaspec_text(inc_path, _visited))
 
     return text + "\n" + "\n".join(extra) if extra else text
+
+
+def load_spec_text(path: Path) -> str:
+    """Load spec text from a .slaspec file or every .slaspec in a directory.
+
+    When given a directory, all .slaspec files are loaded with a shared
+    visited set so @include'd .sinc files are not duplicated across variants.
+    """
+    if path.is_file():
+        return load_slaspec_text(path)
+    visited: set[Path] = set()
+    parts = [load_slaspec_text(f, visited) for f in sorted(path.glob("*.slaspec"))]
+    return "\n".join(parts)
 
 
 def extract_mnemonics(slaspec_text: str) -> set[str]:
@@ -87,28 +97,27 @@ _LANG_ID_TO_SLASPEC: dict[str, tuple[str, str]] = {
 
 
 def load_ghidra_reference(ghidra_home: Path, processor_or_lang_id: str) -> Path:
-    """
-    Return the path to the reference .slaspec for a Ghidra built-in processor.
+    """Return a path to use as the reference for comparison.
 
-    Accepts either:
-      - A Ghidra language ID: "ARM:LE:32:v7"  → ARM7_le.slaspec
-      - A processor name:     "ARM"            → first ARM*.slaspec found
+    - Language ID (e.g. "ARM:LE:32:v7") → the specific .slaspec file.
+    - Bare processor name (e.g. "ARM")  → the full languages/ directory so
+      all variants are included in the mnemonic union.
     """
-    # Try exact language ID match first
     if processor_or_lang_id in _LANG_ID_TO_SLASPEC:
         proc_dir, slaspec_name = _LANG_ID_TO_SLASPEC[processor_or_lang_id]
         path = ghidra_home / "Ghidra" / "Processors" / proc_dir / "data" / "languages" / slaspec_name
         if path.exists():
             return path
 
-    # Fallback: treat as processor name and glob
     processor = processor_or_lang_id.split(":")[0]
     lang_dir = ghidra_home / "Ghidra" / "Processors" / processor / "data" / "languages"
+    if ":" not in processor_or_lang_id and lang_dir.is_dir():
+        return lang_dir
+
     candidates = sorted(lang_dir.glob(f"{processor}*.slaspec"), key=lambda p: len(p.name))
     if candidates:
         return candidates[0]
 
     raise FileNotFoundError(
-        f"No .slaspec found for '{processor_or_lang_id}' in {ghidra_home}. "
-        f"Available ARM specs: ARM4_le, ARM7_le, ARM8_le, etc."
+        f"No .slaspec found for '{processor_or_lang_id}' in {ghidra_home}."
     )

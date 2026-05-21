@@ -15,13 +15,12 @@ from rosetta_schemas.state import PipelineState
 log = logging.getLogger(__name__)
 
 
-def _find_slaspec(lang_dir: Path) -> Path | None:
-    specs = list(lang_dir.glob("*.slaspec"))
-    return specs[0] if specs else None
-
-
 def evaluate_sla_node(state: PipelineState) -> dict[str, Any]:
-    """Compute structural similarity against a reference .slaspec."""
+    """Compute structural similarity against a reference spec.
+
+    generated = lang_dir (directory)
+    reference = reference_slaspec (file or directory of .slaspec files)
+    """
     from rosetta_evaluate_sla.sla.similarity import compare
 
     errors: list[str] = []
@@ -32,13 +31,8 @@ def evaluate_sla_node(state: PipelineState) -> dict[str, Any]:
         errors.append("evaluate_sla_node: lang_dir and reference_slaspec are required")
         return {"instruction_coverage": None, "register_overlap": None, "errors": errors}
 
-    generated = _find_slaspec(Path(lang_dir_str))
-    if not generated:
-        errors.append(f"evaluate_sla_node: no .slaspec found in {lang_dir_str}")
-        return {"instruction_coverage": None, "register_overlap": None, "errors": errors}
-
     try:
-        report = compare(generated, Path(reference_str))
+        report = compare(Path(lang_dir_str), Path(reference_str))
         log.info("evaluate_sla_node: coverage=%.3f reg=%.3f", report.instruction_coverage, report.register_overlap)
         return {
             "instruction_coverage": report.instruction_coverage,

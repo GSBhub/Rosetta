@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from rosetta.evaluation.spec_loader import (
     extract_mnemonics,
     extract_register_names,
-    load_slaspec_text,
+    load_spec_text,
 )
 
 log = logging.getLogger(__name__)
@@ -36,12 +36,17 @@ class SimilarityReport:
 
 
 def compare(
-    generated_slaspec: Path,
-    reference_slaspec: Path,
+    generated: Path,
+    reference: Path,
 ) -> SimilarityReport:
-    """Compute structural similarity between two .slaspec files."""
-    gen_text = load_slaspec_text(generated_slaspec)
-    ref_text = load_slaspec_text(reference_slaspec)
+    """Compute structural similarity between two specs.
+
+    Each argument may be a single .slaspec file or a directory of .slaspec
+    files (e.g. a Ghidra languages/ directory). Mnemonics and registers are
+    unioned across all files in the directory.
+    """
+    gen_text = load_spec_text(generated)
+    ref_text = load_spec_text(reference)
 
     gen_mnemonics = extract_mnemonics(gen_text)
     ref_mnemonics = extract_mnemonics(ref_text)

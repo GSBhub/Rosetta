@@ -306,34 +306,38 @@ def validate(module_dir: str) -> None:
 @click.option(
     "--reference",
     required=True,
-    help="Ghidra language ID (e.g. ARM:LE:32:v7) or path to a reference .slaspec",
+    help=(
+        "Reference to compare against: a Ghidra language ID (e.g. ARM:LE:32:v7), "
+        "a bare processor name (e.g. ARM — compares against all variants), "
+        "a path to a single .slaspec, or a path to a languages/ directory."
+    ),
 )
 def evaluate(module_dir: str, reference: str) -> None:
-    """Structural comparison of a generated spec against a Ghidra reference spec."""
+    """Structural comparison of a generated processor module against a Ghidra reference."""
     from rosetta.config import Settings
     from rosetta.evaluation.similarity import compare
     from rosetta.evaluation.spec_loader import load_ghidra_reference
 
     settings = Settings()
 
-    lang_dir = Path(module_dir)
-    if not any(lang_dir.glob("*.slaspec")):
-        lang_dir = lang_dir / "data" / "languages"
-
-    generated = next(lang_dir.glob("*.slaspec"), None)
-    if not generated:
+    gen_path = Path(module_dir)
+    if not gen_path.is_dir():
+        click.echo(f"Error: {module_dir} is not a directory", err=True)
+        sys.exit(1)
+    if not any(gen_path.glob("*.slaspec")):
+        gen_path = gen_path / "data" / "languages"
+    if not any(gen_path.glob("*.slaspec")):
         click.echo("No .slaspec found in module directory", err=True)
         sys.exit(1)
 
     ref_path = Path(reference)
     if not ref_path.exists():
-        processor = reference.split(":")[0]
-        ref_path = load_ghidra_reference(settings.ghidra_home, processor)
+        ref_path = load_ghidra_reference(settings.ghidra_home, reference)
 
-    click.echo(f"Generated : {generated}")
+    click.echo(f"Generated : {gen_path}")
     click.echo(f"Reference : {ref_path}")
 
-    report = compare(generated, ref_path)
+    report = compare(gen_path, ref_path)
     click.echo("\n" + report.summary())
 
 

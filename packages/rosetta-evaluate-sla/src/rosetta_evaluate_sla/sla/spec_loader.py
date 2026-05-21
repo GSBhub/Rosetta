@@ -56,6 +56,19 @@ def load_slaspec_text(slaspec_path: Path, _visited: set[Path] | None = None) -> 
     return text + "\n" + "\n".join(extra) if extra else text
 
 
+def load_spec_text(path: Path) -> str:
+    """Load spec text from a .slaspec file or every .slaspec in a directory.
+
+    When given a directory, all .slaspec files are loaded with a shared
+    visited set so @include'd .sinc files are not duplicated across variants.
+    """
+    if path.is_file():
+        return load_slaspec_text(path)
+    visited: set[Path] = set()
+    parts = [load_slaspec_text(f, visited) for f in sorted(path.glob("*.slaspec"))]
+    return "\n".join(parts)
+
+
 def extract_mnemonics(slaspec_text: str) -> set[str]:
     pattern = re.compile(r"^\s*:\s*([A-Za-z][A-Za-z0-9_\.]*)", re.MULTILINE)
     return {m.group(1).upper() for m in pattern.finditer(slaspec_text)}
@@ -71,6 +84,12 @@ def extract_register_names(slaspec_text: str) -> set[str]:
 
 
 def load_ghidra_reference(ghidra_home: Path, processor_or_lang_id: str) -> Path:
+    """Return a path to use as the reference for comparison.
+
+    - Language ID (e.g. "ARM:LE:32:v7") → the specific .slaspec file.
+    - Bare processor name (e.g. "ARM")  → the full languages/ directory so
+      all variants are included in the mnemonic union.
+    """
     if processor_or_lang_id in _LANG_ID_TO_SLASPEC:
         proc_dir, slaspec_name = _LANG_ID_TO_SLASPEC[processor_or_lang_id]
         path = ghidra_home / "Ghidra" / "Processors" / proc_dir / "data" / "languages" / slaspec_name
@@ -79,6 +98,9 @@ def load_ghidra_reference(ghidra_home: Path, processor_or_lang_id: str) -> Path:
 
     processor = processor_or_lang_id.split(":")[0]
     lang_dir = ghidra_home / "Ghidra" / "Processors" / processor / "data" / "languages"
+    if ":" not in processor_or_lang_id and lang_dir.is_dir():
+        return lang_dir
+
     candidates = sorted(lang_dir.glob(f"{processor}*.slaspec"), key=lambda p: len(p.name))
     if candidates:
         return candidates[0]
