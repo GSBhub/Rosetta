@@ -4,9 +4,34 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from pathlib import Path
 
 log = logging.getLogger(__name__)
+
+_CHUNK_SIZE = 1000
+
+
+def _chunk_text(text: str, chunk_size: int = _CHUNK_SIZE) -> list[str]:
+    overlap = chunk_size // 10
+    chunks, start = [], 0
+    while start < len(text):
+        chunks.append(text[start : start + chunk_size])
+        start += chunk_size - overlap
+    return chunks
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    mag_a = math.sqrt(sum(x * x for x in a))
+    mag_b = math.sqrt(sum(x * x for x in b))
+    return dot / (mag_a * mag_b) if mag_a and mag_b else 0.0
+
+
+def _mean_pairwise_similarity(vecs_a: list[list[float]], vecs_b: list[list[float]]) -> float:
+    if not vecs_a or not vecs_b:
+        return 0.0
+    return sum(max(_cosine(va, vb) for vb in vecs_b) for va in vecs_a) / len(vecs_a)
 
 # All ARM + AARCH64 variants shipped with Ghidra 12.x
 ARM_VARIANTS: list[tuple[str, str, str]] = [
@@ -66,7 +91,6 @@ def compare_all_variants(
     if include_embeddings:
         from docquery.config import Settings as DocSettings
         from docquery.embeddings.provider import get_embeddings
-        from rosetta.evaluation.similarity import _chunk_text, _mean_pairwise_similarity
         cfg = settings or DocSettings()
         embedder = get_embeddings(cfg)
         gen_vecs = embedder.embed_documents(_chunk_text(gen_text))
@@ -83,7 +107,6 @@ def compare_all_variants(
         row.update(_structural_metrics(gen_text, ref_text))
 
         if include_embeddings and gen_vecs is not None:
-            from rosetta.evaluation.similarity import _chunk_text, _mean_pairwise_similarity
             ref_vecs = embedder.embed_documents(_chunk_text(ref_text))
             row["semantic_similarity"] = _mean_pairwise_similarity(gen_vecs, ref_vecs)
 

@@ -216,9 +216,7 @@ def summarize_and_warn(stage: str, state: dict[str, Any]) -> None:
     elif stage == "evaluate":
         cov = state.get("instruction_coverage")
         reg = state.get("register_overlap")
-        sem = state.get("semantic_similarity")
-        log.info("evaluate: coverage=%.3f  reg_overlap=%.3f  semantic_sim=%.3f",
-                 cov or 0.0, reg or 0.0, sem or 0.0)
+        log.info("evaluate: coverage=%.3f  reg_overlap=%.3f", cov or 0.0, reg or 0.0)
 
 
 # ---------------------------------------------------------------------------

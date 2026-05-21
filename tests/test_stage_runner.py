@@ -279,7 +279,6 @@ def test_summarize_evaluate_does_not_raise():
     state = {
         "instruction_coverage": 0.85,
         "register_overlap": 0.9,
-        "semantic_similarity": 0.7,
         "errors": [],
     }
     summarize_and_warn("evaluate", state)  # should not raise

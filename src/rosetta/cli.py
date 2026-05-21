@@ -308,15 +308,12 @@ def validate(module_dir: str) -> None:
     required=True,
     help="Ghidra language ID (e.g. ARM:LE:32:v7) or path to a reference .slaspec",
 )
-@click.option("--embed-model", default=None, help="Override EMBED_MODEL env var")
-@click.option("--embed-base-url", default=None, help="Override EMBED_BASE_URL env var")
-def evaluate(module_dir: str, reference: str, embed_model: str | None, embed_base_url: str | None) -> None:
-    """Semantic comparison of a generated spec against a Ghidra reference spec."""
+def evaluate(module_dir: str, reference: str) -> None:
+    """Structural comparison of a generated spec against a Ghidra reference spec."""
     from rosetta.config import Settings
     from rosetta.evaluation.similarity import compare
     from rosetta.evaluation.spec_loader import load_ghidra_reference
 
-    _apply_model_overrides(None, None, embed_model, embed_base_url)
     settings = Settings()
 
     lang_dir = Path(module_dir)
@@ -328,8 +325,6 @@ def evaluate(module_dir: str, reference: str, embed_model: str | None, embed_bas
         click.echo("No .slaspec found in module directory", err=True)
         sys.exit(1)
 
-    # Resolve reference: either a file path or a Ghidra processor name derived
-    # from the language ID (e.g. "ARM:LE:32:v7" → processor "ARM")
     ref_path = Path(reference)
     if not ref_path.exists():
         processor = reference.split(":")[0]
@@ -337,9 +332,8 @@ def evaluate(module_dir: str, reference: str, embed_model: str | None, embed_bas
 
     click.echo(f"Generated : {generated}")
     click.echo(f"Reference : {ref_path}")
-    click.echo("Computing similarity (this may take a minute) ...")
 
-    report = compare(generated, ref_path, settings)
+    report = compare(generated, ref_path)
     click.echo("\n" + report.summary())
 
 

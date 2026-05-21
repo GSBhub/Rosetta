@@ -43,7 +43,6 @@ class PipelineState(TypedDict, total=False):
 
     # ── Evaluation outputs ────────────────────────────────────────────────────
     reference_slaspec: str | None
-    semantic_similarity: float | None
     instruction_coverage: float | None
     register_overlap: float | None
 

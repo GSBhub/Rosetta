@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Auto-generated compiler spec for ARM Cortex-M -->
+<compiler_spec>
+  <data_organization>
+    <absolute_max_alignment value="0"/>
+    <machine_alignment value="4"/>
+    <default_alignment value="4"/>
+    <default_pointer_alignment value="4"/>
+    <pointer_size value="4"/>
+    <wchar_size value="4"/>
+    <short_size value="2"/>
+    <integer_size value="4"/>
+    <long_size value="4"/>
+    <long_long_size value="8"/>
+    <float_size value="4"/>
+    <double_size value="8"/>
+    <long_double_size value="8"/>
+    <size_alignment_map>
+      <entry size="1" alignment="1"/>
+      <entry size="2" alignment="2"/>
+      <entry size="4" alignment="4"/>
+      <entry size="8" alignment="8"/>
+    </size_alignment_map>
+  </data_organization>
+
+  <stackpointer register="SP" space="ram"/>
+
+  <default_proto>
+    <proto name="__default" extrapop="0" stackshift="0">
+      <input>
+        <pentry minsize="1" maxsize="4">
+          <register name="R0"/>
+        </pentry>
+        <pentry minsize="1" maxsize="4">
+          <register name="R1"/>
+        </pentry>
+        <pentry minsize="1" maxsize="4">
+          <register name="R2"/>
+        </pentry>
+        <pentry minsize="1" maxsize="4">
+          <register name="R3"/>
+        </pentry>
+      </input>
+      <output>
+        <pentry minsize="1" maxsize="4">
+          <register name="R0"/>
+        </pentry>
+      </output>
+      <unaffected>
+        <register name="R4"/>
+        <register name="R5"/>
+        <register name="R6"/>
+        <register name="R7"/>
+        <register name="R8"/>
+        <register name="R9"/>
+        <register name="R10"/>
+        <register name="R11"/>
+        <register name="R12"/>
+        <register name="SP"/>
+        <register name="LR"/>
+        <register name="PC"/>
+      </unaffected>
+    </proto>
+  </default_proto>
+</compiler_spec>

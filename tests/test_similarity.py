@@ -3,8 +3,8 @@
 import math
 import pytest
 
-from rosetta.evaluation.similarity import (
-    SimilarityReport,
+from rosetta.evaluation.similarity import SimilarityReport
+from rosetta.evaluation.graph import (
     _chunk_text,
     _cosine,
     _mean_pairwise_similarity,
@@ -132,7 +132,6 @@ def test_register_overlap_jaccard():
 
 def test_similarity_report_summary_format():
     r = SimilarityReport(
-        semantic_similarity=0.75,
         instruction_coverage=0.60,
         register_overlap=0.50,
         generated_mnemonic_count=30,
@@ -143,6 +142,5 @@ def test_similarity_report_summary_format():
         common_registers=10,
     )
     summary = r.summary()
-    assert "0.750" in summary
     assert "0.600" in summary
     assert "0.500" in summary

@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Auto-generated processor spec for ARM Cortex-M -->
+<processor_spec>
+  <properties>
+    <property key="addressesDoNotAppearDirectlyInCode" value="true"/>
+  </properties>
+
+  <programcounter register="PC"/>
+
+  <context_data>
+    <context_set space="ram">
+      <set name="TMode" val="0"/>
+    </context_set>
+  </context_data>
+
+  <register_data>
+    <register name="R0" rename="R0" group="General Purpose"/>
+    <register name="R1" rename="R1" group="General Purpose"/>
+    <register name="R2" rename="R2" group="General Purpose"/>
+    <register name="R3" rename="R3" group="General Purpose"/>
+    <register name="R4" rename="R4" group="General Purpose"/>
+    <register name="R5" rename="R5" group="General Purpose"/>
+    <register name="R6" rename="R6" group="General Purpose"/>
+    <register name="R7" rename="R7" group="General Purpose"/>
+    <register name="R8" rename="R8" group="General Purpose"/>
+    <register name="R9" rename="R9" group="General Purpose"/>
+    <register name="R10" rename="R10" group="General Purpose"/>
+    <register name="R11" rename="R11" group="General Purpose"/>
+    <register name="R12" rename="R12" group="General Purpose"/>
+    <register name="SP" rename="SP" group="General Purpose"/>
+    <register name="LR" rename="LR" group="General Purpose"/>
+    <register name="PC" rename="PC" group="General Purpose"/>
+  </register_data>
+</processor_spec>
