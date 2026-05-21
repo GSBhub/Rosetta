@@ -11,10 +11,10 @@ log = logging.getLogger(__name__)
 _PCODE_SYSTEM = """\
 You are an expert in Ghidra's SLEIGH language. Given a natural-language description of an
 instruction's semantics, produce a single-line SLEIGH P-code statement that captures the
-core operation. Use register names as variables. Examples:
-  "Adds Rn and Rm, stores result in Rd" → "Rd = Rn + Rm;"
-  "Loads a 32-bit word from memory at address Rn into Rd" → "Rd = *[ram]:4 Rn;"
-  "Branches to the address in Rm" → "goto [Rm];"
+core operation. Use lowercase register/variable names (e.g. rd, rs, ra, tmp). Examples:
+  "Adds two registers, stores result in destination" → "rd = ra + rb;"
+  "Loads a 32-bit word from memory at base address into destination" → "rd = *[ram]:4 ra;"
+  "Branches unconditionally to the address in a register" → "goto [ra];"
 Return ONLY the P-code statement, no explanation.
 """
 

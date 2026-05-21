@@ -43,8 +43,8 @@ class ModuleGenerator:
         lang_dir = out_dir / processor_name / "data" / "languages"
         lang_dir.mkdir(parents=True, exist_ok=True)
 
-        pc = find_register(spec.registers, "PC", "R15", "X30", "IP")
-        sp = find_register(spec.registers, "SP", "R13", "X2", "X29")
+        pc = find_register(spec.registers, "PC", "IP", "EIP", "RIP", description_keyword="program counter")
+        sp = find_register(spec.registers, "SP", "ESP", "RSP", description_keyword="stack pointer")
 
         normalized_instructions = [normalize_instruction(i) for i in spec.instructions]
 

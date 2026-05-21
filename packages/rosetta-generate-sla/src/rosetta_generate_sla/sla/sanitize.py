@@ -57,28 +57,6 @@ def normalize_bit_fields(bit_fields: dict[str, str]) -> dict[str, str]:
     return result
 
 
-def normalize_bit_constraints(
-    bit_constraints: dict[str, str],
-    bit_fields: dict[str, str],
-) -> dict[str, str]:
-    result: dict[str, str] = {}
-    for field, val in bit_constraints.items():
-        if not _VALID_IDENT.match(field):
-            continue
-        v = str(val).strip()
-        if not _PURE_BINARY.match(v):
-            continue
-        if field in bit_fields:
-            parts = str(bit_fields[field]).split(":")
-            try:
-                field_width = abs(int(parts[0]) - int(parts[1])) + 1
-            except (ValueError, IndexError):
-                field_width = None
-            if field_width is not None and len(v) > field_width:
-                continue
-        result[field] = v
-    return result
-
 
 def normalize_instruction(instr: InstructionDef) -> InstructionDef:
     ni = copy.copy(instr)
@@ -94,10 +72,19 @@ def normalize_instruction(instr: InstructionDef) -> InstructionDef:
     return ni
 
 
-def find_register(registers: list[RegisterDef], *candidate_aliases: str) -> str:
+def find_register(
+    registers: list[RegisterDef],
+    *candidate_aliases: str,
+    description_keyword: str = "",
+) -> str:
     upper_aliases = {a.upper() for a in candidate_aliases}
     for reg in registers:
         names = {reg.name.upper()} | {a.upper() for a in reg.aliases}
         if names & upper_aliases:
             return reg.name
-    return registers[0].name if registers else "PC"
+    if description_keyword:
+        kw = description_keyword.lower()
+        for reg in registers:
+            if kw in reg.description.lower():
+                return reg.name
+    return registers[0].name if registers else candidate_aliases[0] if candidate_aliases else "PC"

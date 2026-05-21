@@ -248,8 +248,8 @@ class ISAExtractor:
         Path(path).write_text(spec.model_dump_json(indent=2))
         log.info("ISASpec written to %s", path)
 
-    @classmethod
-    def load(cls, path: str | Path) -> ISASpec:
+    @staticmethod
+    def load(path: str | Path) -> ISASpec:
         return ISASpec.model_validate_json(Path(path).read_text())
 
     # ------------------------------------------------------------------

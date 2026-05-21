@@ -22,11 +22,10 @@ _BAD_PCODE = re.compile(
     r"[A-Za-z_]\w*\s*\(|"              # function-call style: name(
     r"\bor\b|\band\b|\bnot\b|"         # logical English connectors
     r"[A-Z][a-z]+(?:_[A-Z][a-z]+)+|"  # CamelCase_Under pseudo-ops
-    r"\bMem(?:ory)?\[|"                # Mem[...] / Memory[...] — ARM asm, not SLEIGH
-    r"#[A-Za-z_]\w*|"                  # #imm ARM immediate syntax
+    r"\bMem(?:ory)?\[|"                # assembly-style memory reference, not SLEIGH *[]
+    r"#[A-Za-z_]\w*|"                  # assembly immediate prefix (#imm)
     r"\b\w+\[\d+:\d+\]\s*=|"          # bit-slice LHS assignment (invalid in SLEIGH)
-    r"\b[A-Z][a-z]\w*\b",             # mixed-case identifiers (Rd, Rn, RdLo…) — ARM
-                                       # operand names, not defined SLEIGH varnodes
+    r"\b[A-Z][a-z]\w*\b",             # mixed-case assembly operand names (not SLEIGH varnodes)
     re.IGNORECASE,
 )
 
@@ -75,30 +74,6 @@ def _normalize_bit_fields(bit_fields: dict[str, str]) -> dict[str, str]:
     return result
 
 
-def _normalize_bit_constraints(
-    bit_constraints: dict[str, str],
-    bit_fields: dict[str, str],
-) -> dict[str, str]:
-    """Keep only constraints with valid identifiers and binary values fitting their field."""
-    result: dict[str, str] = {}
-    for field, val in bit_constraints.items():
-        if not _VALID_IDENT.match(field):
-            continue
-        v = str(val).strip()
-        if not _PURE_BINARY.match(v):
-            continue
-        # Determine field width from bit_fields (format "high:low").
-        if field in bit_fields:
-            parts = str(bit_fields[field]).split(":")
-            try:
-                field_width = abs(int(parts[0]) - int(parts[1])) + 1
-            except (ValueError, IndexError):
-                field_width = None
-            if field_width is not None and len(v) > field_width:
-                continue  # constraint value too wide for the field — skip it
-        result[field] = v
-    return result
-
 
 def _normalize_instruction(instr: InstructionDef) -> InstructionDef:
     """Return a copy of instr with SLEIGH-safe field data."""
@@ -124,15 +99,23 @@ def _normalize_instruction(instr: InstructionDef) -> InstructionDef:
     return ni
 
 
-def _find_register(registers: list[RegisterDef], *candidate_aliases: str) -> str:
-    """Return the canonical name of the first register that matches any alias."""
+def _find_register(
+    registers: list[RegisterDef],
+    *candidate_aliases: str,
+    description_keyword: str = "",
+) -> str:
+    """Return the canonical name of the first register matching any alias or description keyword."""
     upper_aliases = {a.upper() for a in candidate_aliases}
     for reg in registers:
         names = {reg.name.upper()} | {a.upper() for a in reg.aliases}
         if names & upper_aliases:
             return reg.name
-    # Fallback: return the first register if no match
-    return registers[0].name if registers else "PC"
+    if description_keyword:
+        kw = description_keyword.lower()
+        for reg in registers:
+            if kw in reg.description.lower():
+                return reg.name
+    return registers[0].name if registers else candidate_aliases[0] if candidate_aliases else "PC"
 
 
 class ModuleGenerator:
@@ -156,8 +139,8 @@ class ModuleGenerator:
         lang_dir = out_dir / processor_name / "data" / "languages"
         lang_dir.mkdir(parents=True, exist_ok=True)
 
-        pc = _find_register(spec.registers, "PC", "R15", "X30", "IP")
-        sp = _find_register(spec.registers, "SP", "R13", "X2", "X29")
+        pc = _find_register(spec.registers, "PC", "IP", "EIP", "RIP", description_keyword="program counter")
+        sp = _find_register(spec.registers, "SP", "ESP", "RSP", description_keyword="stack pointer")
 
         # Normalize instructions: fix encoding_bits=0, bad field names, non-binary constraints.
         normalized_instructions = [_normalize_instruction(i) for i in spec.instructions]

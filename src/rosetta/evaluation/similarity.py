@@ -9,7 +9,6 @@ from dataclasses import dataclass
 
 from docquery.config import Settings as DocSettings
 from docquery.embeddings.provider import get_embeddings
-from langchain_core.documents import Document
 
 from rosetta.evaluation.spec_loader import (
     extract_mnemonics,
