@@ -1,2 +1,0 @@
-{"mnemonic":"ADC","variants":[],"encoding_bits":32,"bit_fields":{},"bit_constraints":{},"operands":[],"semantics":"Unknown","pcode_hint":""}
-{"mnemonic":"ADDA","variants":["ADDA Rd, Rn, Rm"],"encoding_bits":32,"bit_fields":{"opcode":"01000000","Rd":"11110","Rn":"11100","Rm":"10111"},"bit_constraints":{},"operands":["Rd","Rn","Rm"],"semantics":"The ADDA instruction adds the contents of register Rm to the contents of register Rn and stores the result in register Rd. The operation is performed on 16-bit values.","pcode_hint":""}
