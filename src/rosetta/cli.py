@@ -72,7 +72,8 @@ def cli() -> None:
 
 @cli.command()
 @click.argument("manual", type=click.Path(exists=True))
-@click.option("--db", required=True, help="Output docquery SQLite database path")
+@click.option("--db", default=lambda: os.environ.get("CHROMA_DB_PATH"), required=True,
+              help="ChromaDB directory path (overrides CHROMA_DB_PATH env var)")
 @click.option("--source", is_flag=True, default=False,
     help="Ingest source code files instead of a PDF. MANUAL must be a directory; "
          "all .c, .h, .py, .cpp, .hpp files are loaded as text chunks.")
@@ -135,7 +136,8 @@ def _generate_or_append(spec, name: str, out_dir: Path, append_slaspec: str | No
 
 
 @cli.command()
-@click.option("--db", required=True, help="docquery database from 'ingest'")
+@click.option("--db", default=lambda: os.environ.get("CHROMA_DB_PATH"), required=True,
+              help="ChromaDB directory path (overrides CHROMA_DB_PATH env var)")
 @click.option("--name", required=True, help="Processor name (used as file prefix)")
 @click.option("--out", default="./output", show_default=True, help="Output directory")
 @click.option("--spec-json", default=None, help="Load existing isa_spec.json (skip extraction)")
@@ -350,7 +352,8 @@ def evaluate(module_dir: str, reference: str, embed_model: str | None, embed_bas
 
 @cli.command("run-stage")
 @click.argument("stage")
-@click.option("--db", default=None, help="ChromaDB directory path (required for most stages)")
+@click.option("--db", default=lambda: os.environ.get("CHROMA_DB_PATH"),
+              help="ChromaDB directory path (overrides CHROMA_DB_PATH env var)")
 @click.option("--name", required=True, help="Processor name (e.g. ARM_v6_generated)")
 @click.option("--out", default="./output", show_default=True, help="Output directory (for generate stage)")
 @click.option("--checkpoint", required=True, type=click.Path(), help="Path to checkpoint state JSON file")
