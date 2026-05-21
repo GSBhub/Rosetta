@@ -1,4 +1,4 @@
-"""Rosetta CLI: ingest / generate / validate / evaluate / batch."""
+"""Rosetta CLI: ingest / generate / validate / evaluate / run-stage / graph."""
 
 from __future__ import annotations
 
@@ -344,8 +344,6 @@ def evaluate(module_dir: str, reference: str, embed_model: str | None, embed_bas
 
 
 # ---------------------------------------------------------------------------
-# batch
-# ---------------------------------------------------------------------------
 # run-stage
 # ---------------------------------------------------------------------------
 
@@ -477,66 +475,6 @@ def run_stage_cmd(
             if stage_errors:
                 click.echo(f"Stopping 'all' after '{s}' due to errors: {stage_errors}", err=True)
                 sys.exit(1)
-
-
-# ---------------------------------------------------------------------------
-# batch
-# ---------------------------------------------------------------------------
-
-
-@cli.command()
-@click.option(
-    "--manifest",
-    default="manifests/arm.yaml",
-    show_default=True,
-    type=click.Path(exists=True),
-    help="YAML manifest file",
-)
-@click.option("--out", default="./output", show_default=True, help="Output directory")
-@click.option(
-    "--skip-extraction",
-    is_flag=True,
-    default=False,
-    help="Re-use cached isa_spec.json files when available",
-)
-@click.option("--target", default=None, help="Run only this manifest target ID (e.g. armv7)")
-@click.option("--concurrency", default=1, show_default=True, help="Max concurrent LLM calls in Pass 4")
-@click.option("--llm-model", default=None, help="Override LLM_MODEL env var (e.g. llama3:8b)")
-@click.option("--llm-base-url", default=None, help="Override LLM_BASE_URL env var")
-@click.option("--embed-model", default=None, help="Override EMBED_MODEL env var")
-@click.option("--embed-base-url", default=None, help="Override EMBED_BASE_URL env var")
-def batch(
-    manifest: str,
-    out: str,
-    skip_extraction: bool,
-    target: str | None,
-    concurrency: int,
-    llm_model: str | None,
-    llm_base_url: str | None,
-    embed_model: str | None,
-    embed_base_url: str | None,
-) -> None:
-    """Run the full pipeline for every target in the manifest."""
-    from rosetta.config import Settings
-    from rosetta.evaluation.batch_eval import print_summary_table, run_batch
-
-    _apply_model_overrides(llm_model, llm_base_url, embed_model, embed_base_url)
-    settings = Settings()
-    results = run_batch(
-        manifest_path=Path(manifest),
-        out_dir=Path(out),
-        ghidra_home=settings.ghidra_home,
-        settings=settings,
-        skip_extraction=skip_extraction,
-        target_filter=target,
-        max_concurrent=concurrency,
-    )
-    print_summary_table(results)
-    # Write JSON results
-    results_file = Path(out) / "batch_results.json"
-    results_file.parent.mkdir(parents=True, exist_ok=True)
-    results_file.write_text(json.dumps(results, indent=2))
-    click.echo(f"Full results written to {results_file}")
 
 
 # ---------------------------------------------------------------------------
@@ -690,20 +628,7 @@ def load_test(module_dir: str, language_id: str | None, endian: str) -> None:
 
 
 @cli.command()
-@click.option(
-    "--slaspec",
-    "slaspec_path",
-    default=None,
-    type=click.Path(exists=True, dir_okay=False),
-    help="Generated .slaspec to compare against all ARM variants.",
-)
-@click.option(
-    "--results",
-    "results_json",
-    default=None,
-    type=click.Path(exists=True, dir_okay=False),
-    help="batch_results.json from a previous 'rosetta batch' run.",
-)
+@click.argument("slaspec", type=click.Path(exists=True, dir_okay=False))
 @click.option(
     "--out",
     "out_path",
@@ -723,58 +648,36 @@ def load_test(module_dir: str, language_id: str | None, endian: str) -> None:
     help="Do not open an interactive window (useful in headless/CI environments).",
 )
 def graph(
-    slaspec_path: str | None,
-    results_json: str | None,
+    slaspec: str,
     out_path: str | None,
     embeddings: bool,
     no_display: bool,
 ) -> None:
-    """Graph generated SLASpec effectiveness vs every Ghidra ARM processor.
-
-    Two modes:\n
-      --slaspec <file>   Compare one generated .slaspec against all 18 ARM/AARCH64 variants.\n
-      --results <file>   Graph a batch_results.json produced by 'rosetta batch'.
-    """
+    """Compare a generated .slaspec against all Ghidra ARM/AARCH64 variants."""
     import matplotlib
-    if no_display or not out_path is None:
-        matplotlib.use("Agg")  # headless backend when saving to file
+    if no_display or out_path is not None:
+        matplotlib.use("Agg")
 
     from rosetta.config import Settings
-    from rosetta.evaluation.graph import (
-        compare_all_variants,
-        plot_batch_results,
-        plot_variant_comparison,
+    from rosetta.evaluation.graph import compare_all_variants, plot_variant_comparison
+
+    settings = Settings()
+    click.echo(f"Comparing {slaspec} against all Ghidra ARM variants ...")
+    results = compare_all_variants(
+        generated_slaspec=Path(slaspec),
+        ghidra_home=settings.ghidra_home,
+        include_embeddings=embeddings,
+        settings=settings if embeddings else None,
     )
 
-    if slaspec_path is None and results_json is None:
-        click.echo("Provide --slaspec or --results. See --help.", err=True)
-        sys.exit(1)
+    click.echo(f"\n{'Variant':<14} {'Coverage':>10} {'Reg Overlap':>12}")
+    click.echo("-" * 40)
+    for r in results:
+        click.echo(f"{r['variant']:<14} {r['instruction_coverage']:>10.3f} {r['register_overlap']:>12.3f}")
 
-    show = not no_display
     img_path = Path(out_path) if out_path else None
-
-    if slaspec_path:
-        settings = Settings()
-        click.echo(f"Comparing {slaspec_path} against all Ghidra ARM variants ...")
-        results = compare_all_variants(
-            generated_slaspec=Path(slaspec_path),
-            ghidra_home=settings.ghidra_home,
-            include_embeddings=embeddings,
-            settings=settings if embeddings else None,
-        )
-        # Print table
-        click.echo(f"\n{'Variant':<14} {'Coverage':>10} {'Reg Overlap':>12}")
-        click.echo("-" * 40)
-        for r in results:
-            click.echo(f"{r['variant']:<14} {r['instruction_coverage']:>10.3f} {r['register_overlap']:>12.3f}")
-
-        title = f"Generated SLASpec vs All Ghidra ARM Variants\n({Path(slaspec_path).name})"
-        plot_variant_comparison(results, title=title, out_path=img_path, show=show)
-
-    else:
-        data = json.loads(Path(results_json).read_text())
-        click.echo(f"Graphing {len(data)} batch results from {results_json} ...")
-        plot_batch_results(data, out_path=img_path, show=show)
+    title = f"Generated SLASpec vs All Ghidra ARM Variants\n({Path(slaspec).name})"
+    plot_variant_comparison(results, title=title, out_path=img_path, show=not no_display)
 
     if img_path:
         click.echo(f"Graph saved to {img_path}")
