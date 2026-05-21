@@ -1,20 +1,10 @@
-"""Extended get_llm that adds LLM_PROVIDER=anthropic support to docquery."""
+"""Thin re-export of docquery's get_llm.
 
-from __future__ import annotations
+Anthropic support and Ollama timeout/num_predict are now in docquery upstream.
+This module is kept so pcode_node and any other callers that import from here
+continue to work without changes.
+"""
 
-from docquery.config import Settings
-from docquery.embeddings.llm import get_llm as _docquery_get_llm
-from langchain_core.language_models import BaseChatModel
+from docquery.embeddings.llm import get_llm
 
-
-def get_llm(settings: Settings | None = None) -> BaseChatModel:
-    if settings is None:
-        settings = Settings()
-    if settings.llm_provider == "anthropic":
-        from langchain_anthropic import ChatAnthropic
-        return ChatAnthropic(
-            model=settings.llm_model,
-            api_key=settings.llm_api_key,
-            temperature=getattr(settings, "temperature", 0),
-        )
-    return _docquery_get_llm(settings)
+__all__ = ["get_llm"]

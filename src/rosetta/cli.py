@@ -36,12 +36,8 @@ _load_env()
 
 
 def _install_llm_providers() -> None:
-    """Patch docquery's get_llm in-place to support LLM_PROVIDER=anthropic."""
-    if os.environ.get("LLM_PROVIDER") != "anthropic":
-        return
-    from rosetta.utils.llm import get_llm as _extended
-    import docquery.embeddings.llm as _llm_mod
-    _llm_mod.get_llm = _extended
+    """No-op: Anthropic support and Ollama timeout/num_predict are now in docquery upstream."""
+    pass
 
 
 _install_llm_providers()
@@ -343,6 +339,141 @@ def evaluate(module_dir: str, reference: str, embed_model: str | None, embed_bas
 
     report = compare(generated, ref_path, settings)
     click.echo("\n" + report.summary())
+
+
+# ---------------------------------------------------------------------------
+# batch
+# ---------------------------------------------------------------------------
+# run-stage
+# ---------------------------------------------------------------------------
+
+
+@cli.command("run-stage")
+@click.argument("stage")
+@click.option("--db", default=None, help="ChromaDB directory path (required for most stages)")
+@click.option("--name", required=True, help="Processor name (e.g. ARM_v6_generated)")
+@click.option("--out", default="./output", show_default=True, help="Output directory (for generate stage)")
+@click.option("--checkpoint", required=True, type=click.Path(), help="Path to checkpoint state JSON file")
+@click.option("--source", default=None, type=click.Path(), help="PDF or source dir (ingest stage only)")
+@click.option("--reference", default=None, help="Reference .slaspec path (evaluate stage)")
+@click.option("--inter-chunk-sleep", default=2.0, show_default=True, help="Sleep between instruction chunks (Ollama KV GC)")
+@click.option("--max-instructions", default=None, type=int, help="Cap instruction count (instructions stage)")
+@click.option("--max-pcode", default=None, type=int, help="Cap pcode generation (pcode stage)")
+@click.option("--memory-warn-gb", default=2.0, show_default=True, help="Free RAM warning threshold in GB")
+@click.option("--llm-model", default=None, help="Override LLM_MODEL env var")
+@click.option("--llm-base-url", default=None, help="Override LLM_BASE_URL env var")
+@click.option("--embed-model", default=None, help="Override EMBED_MODEL env var")
+@click.option("--embed-base-url", default=None, help="Override EMBED_BASE_URL env var")
+def run_stage_cmd(
+    stage: str,
+    db: str | None,
+    name: str,
+    out: str,
+    checkpoint: str,
+    source: str | None,
+    reference: str | None,
+    inter_chunk_sleep: float,
+    max_instructions: int | None,
+    max_pcode: int | None,
+    memory_warn_gb: float,
+    llm_model: str | None,
+    llm_base_url: str | None,
+    embed_model: str | None,
+    embed_base_url: str | None,
+) -> None:
+    """Run a single pipeline stage (or 'all') with checkpoint-based I/O.
+
+    STAGE is one of: ingest meta registers mnemonics instructions pcode
+    generate validate evaluate  — or 'all' to run the full sequence.
+
+    A checkpoint JSON file accumulates state across stages so each run
+    reads the previous stage's output and adds its own.  Per-stage
+    snapshots are written alongside the checkpoint as <name>.<stage>.json.
+    """
+    import dataclasses
+    from rosetta.config import Settings
+    from rosetta.stage_runner import (
+        STAGE_ORDER,
+        build_initial_state,
+        load_checkpoint,
+        run_stage,
+        save_checkpoint,
+        summarize_and_warn,
+    )
+
+    _apply_model_overrides(llm_model, llm_base_url, embed_model, embed_base_url)
+    settings = Settings()
+    if db:
+        settings.db_path = db
+
+    checkpoint_path = Path(checkpoint)
+    snapshot_dir = checkpoint_path.parent
+
+    state = load_checkpoint(checkpoint_path)
+    if not state:
+        if not db:
+            click.echo("Error: --db is required when no checkpoint exists yet", err=True)
+            sys.exit(1)
+        settings_dict = dataclasses.asdict(settings)
+        state = build_initial_state(
+            db_path=db,
+            processor_name=name,
+            out_dir=out,
+            settings_dict=settings_dict,
+            ghidra_home=str(settings.ghidra_home),
+            reference_slaspec=reference,
+            source_path=source,
+            inter_chunk_sleep=inter_chunk_sleep,
+            max_instructions=max_instructions,
+            max_pcode=max_pcode,
+            memory_warn_gb=memory_warn_gb,
+        )
+    else:
+        # Refresh mutable inputs that may differ per invocation
+        if db:
+            state["db_path"] = db
+            settings_dict = dataclasses.asdict(settings)
+            state["settings_dict"] = settings_dict
+        if source:
+            state["source_path"] = source
+        if reference:
+            state["reference_slaspec"] = reference
+        if out != "./output":
+            state["out_dir"] = out
+        state["processor_name"] = name
+        state["ghidra_home"] = str(settings.ghidra_home)
+        state["inter_chunk_sleep"] = inter_chunk_sleep
+        if max_instructions is not None:
+            state["max_instructions"] = max_instructions
+        if max_pcode is not None:
+            state["max_pcode"] = max_pcode
+
+    stages_to_run = STAGE_ORDER if stage == "all" else [stage]
+
+    for s in stages_to_run:
+        try:
+            state = run_stage(state, s)
+        except ValueError as exc:
+            click.echo(f"Error: {exc}", err=True)
+            sys.exit(1)
+        except Exception as exc:
+            click.echo(f"Stage '{s}' raised an unexpected error: {exc}", err=True)
+            save_checkpoint(checkpoint_path, state)
+            sys.exit(1)
+
+        save_checkpoint(checkpoint_path, state)
+        snap = snapshot_dir / f"{name}.{s}.json"
+        snap.write_text(json.dumps(state, indent=2))
+
+        summarize_and_warn(s, state)
+        click.echo(f"Stage '{s}' complete → snapshot: {snap}")
+
+        # When running 'all', stop on errors produced by this stage
+        if stage == "all" and state.get("errors"):
+            stage_errors = [e for e in (state.get("errors") or []) if s in e]
+            if stage_errors:
+                click.echo(f"Stopping 'all' after '{s}' due to errors: {stage_errors}", err=True)
+                sys.exit(1)
 
 
 # ---------------------------------------------------------------------------

@@ -16,8 +16,7 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel
 from typing_extensions import TypedDict
 
-from docquery._extractor import ExtractionPipeline
-from docquery._ingest import _build_chroma
+import docquery
 
 log = logging.getLogger(__name__)
 
@@ -77,14 +76,12 @@ class _MnemonicState(TypedDict):
 
 def _count_node(state: _MnemonicState) -> _MnemonicState:
     try:
-        pipeline = ExtractionPipeline(
-            output_model=_InstructionCount,
+        result = docquery.query(
+            "How many unique instruction mnemonics are defined in this ISA manual? "
+            "Return only a JSON object with a 'count' field containing the integer.",
+            schema=_InstructionCount,
             system_prompt=_COUNT_SYSTEM_PROMPT,
             settings=state["settings"],
-        )
-        result = pipeline.run(
-            "How many unique instruction mnemonics are defined in this ISA manual? "
-            "Return only a JSON object with a 'count' field containing the integer."
         )
         total = result.count if isinstance(result, _InstructionCount) else 50
     except Exception as exc:
@@ -107,12 +104,12 @@ def _fetch_node(state: _MnemonicState) -> _MnemonicState:
     new_mnemonics: list[str] = []
 
     try:
-        pipeline = ExtractionPipeline(
-            output_model=_MnemonicList,
+        result = docquery.query(
+            strategy,
+            schema=_MnemonicList,
             system_prompt=_SYSTEM_PROMPT,
             settings=state["settings"],
         )
-        result = pipeline.run(strategy)
         if isinstance(result, _MnemonicList):
             for m in result.mnemonics:
                 cleaned = _clean_mnemonic(m)
@@ -171,7 +168,9 @@ def discover_mnemonics(
 ) -> list[str]:
     """Fan out across multiple RAG query strategies; return deduplicated uppercase mnemonics."""
     settings.db_path = db_path
-    _build_chroma(settings)
+    # settings.vs must already be set by the caller (mnemonics_node sets it via
+    # get_chroma_wrapper before calling here). Do NOT call _build_chroma — that
+    # overwrites settings.vs with the old SQLite-backed chroma and hangs.
 
     graph = StateGraph(_MnemonicState)
     graph.add_node("count", _count_node)
