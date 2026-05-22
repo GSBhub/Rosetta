@@ -19,7 +19,7 @@ Step-by-step guide to verifying every stage of the pipeline from PDF ingestion t
 
 ### Install
 ```bash
-uv sync          # installs all workspace packages + docquery from git
+uv sync      # installs all workspace packages + docquery from git
 ```
 
 ### Confirm `.env` is populated
@@ -35,13 +35,13 @@ cat .env
 Run the full test suite before doing anything else. No live Ollama, Ghidra, or ChromaDB instance is required — all external services are mocked.
 
 ```bash
-# Root package tests (legacy ISAExtractor, batch eval, module generator, …)
+# Root package tests (CLI, stage runner, module generator, spec loader, …)
 uv run pytest tests/ -v
 
 # All workspace packages (LangGraph nodes, schemas, utils, …)
 uv run pytest packages/ -v
 
-# Everything at once
+# Everything at once (86 tests)
 uv run pytest tests/ packages/ -v
 ```
 
@@ -66,8 +66,8 @@ uv run pytest -k "test_mnemonics_node_filter"
 | `rosetta-ingest` | success path, missing db_path, ingest errors | `docquery.ingest` |
 | `rosetta-meta` | success, fallback on bad LLM response | `docquery.query` |
 | `rosetta-registers` | success, empty result | `docquery.query` |
-| `rosetta-mnemonics` | discovery deduplication, strategy exhaustion, filter globs, `mnemonics_node` | `ExtractionPipeline.run`, `_build_chroma` |
-| `rosetta-instructions` | concurrency, `max_instructions` cap, `stop_after`, `resume` | `extract_instruction_async`, `_build_chroma` |
+| `rosetta-mnemonics` | discovery deduplication, strategy exhaustion, filter globs, `mnemonics_node` | `ExtractionPipeline.run`, `get_chroma_wrapper` |
+| `rosetta-instructions` | concurrency, `max_instructions` cap, `stop_after`, `resume` | `extract_instruction_async`, `get_chroma_wrapper` |
 | `rosetta-pcode` | hint generation, skip existing, `max_pcode` limit | `generate_pcode` |
 | `rosetta-generate-sla` | all 4 output files written, mnemonic/register content | none (real Jinja2 render) |
 | `rosetta-validate-sla` | success/failure compile paths, error propagation | `compile_slaspec`, `subprocess.run` |
@@ -83,10 +83,10 @@ Ingest a PDF manual into a ChromaDB vector store. Any ISA reference manual works
 rosetta ingest manuals/arm_reference.pdf --db dbs/arm_test
 ```
 
-`--db` points to a **directory** (ChromaDB), not a single file.
+`--db` is a **directory** (ChromaDB persistent store), not a file. Omit `--db` to use `CHROMA_DB_PATH` from `.env`.
 
 **What to watch for:**
-- Log line: `Ingested N items into dbs/arm_test`
+- Log line: `Ingested N document(s) into dbs/arm_test`
 - No exceptions
 
 **Verify the database was created:**
@@ -108,7 +108,7 @@ Expected: `Chunks in DB: N` where N is typically 2 000–15 000 for a full ISA m
 
 ```bash
 rosetta ingest manuals/arm_reference.pdf --db dbs/arm_test
-# Expected: "Ingested 0 items into dbs/arm_test"  (or similar skip message)
+# Expected: "Ingested 0 document(s) into dbs/arm_test"
 ```
 
 ---
@@ -128,18 +128,21 @@ rosetta generate \
 
 **Expected log sequence:**
 ```
-INFO  [ingest node skipped — db already exists]
-INFO  [meta] extracting ISA metadata
-INFO  [registers] extracting register file
-INFO  [mnemonics] starting multi-strategy discovery
-INFO  [mnemonics] strategy 1/10: list ALL mnemonics
+INFO rosetta.graph: Extracting ISA from dbs/arm_test ...
+INFO rosetta_ingest.node: ingest node skipped — db already populated
+INFO rosetta_meta.node: extracting ISA metadata
+INFO rosetta_registers.node: extracting register file
+INFO rosetta_mnemonics.discovery: starting multi-strategy discovery
+INFO rosetta_mnemonics.discovery: strategy 1/10 ...
 ...
-INFO  [mnemonics] found N unique mnemonics after 10 strategies
-INFO  [instructions] starting pass (concurrency=2)
-INFO  [instructions] chunk 1–20 / N remaining
+INFO rosetta_mnemonics.discovery: found N unique mnemonics
+INFO rosetta_instructions.node: starting instruction extraction (concurrency=2)
+INFO rosetta_instructions.node: chunk 1–20 / N remaining
 ...
-INFO  [pcode] generating P-code hints
-INFO  [generate_sla] rendered 4 SLEIGH files → output/ARM_test/data/languages
+INFO rosetta_pcode.node: generating P-code hints
+INFO rosetta_generate_sla.node: rendered 4 SLEIGH files → output/ARM_test/data/languages
+INFO rosetta.cli: ISASpec cached to dbs/ARM_test_isa_spec.json
+INFO rosetta.cli: Module written to output/ARM_test/data/languages
 ```
 
 **Spot-check the generated spec:**
@@ -169,7 +172,7 @@ rosetta generate --db dbs/arm_test --name ARM_test --out ./output --stop-after m
 rosetta generate --db dbs/arm_test --name ARM_test --out ./output --stop-after instructions
 ```
 
-Valid `--stop-after` values: `meta`, `registers`, `mnemonics`, `stubs`, `instructions`.
+Valid `--stop-after` values: `meta`, `registers`, `mnemonics`, `stubs`, `instructions`. Use `stubs` to create minimal `InstructionDef` stubs for all discovered mnemonics without per-instruction LLM calls — fast path to maximum mnemonic coverage.
 
 **Limit instructions for a quick smoke test:**
 ```bash
@@ -261,46 +264,53 @@ rosetta evaluate ./output/ARM_test --reference ARM:LE:32:v7
 
 **Expected output (example):**
 ```
-Semantic similarity : 0.72
-Instruction coverage: 0.58   (58% of ARM v7 mnemonics present)
-Register overlap    : 0.81   (Jaccard)
+Generated : output/ARM_test/data/languages
+Reference : <GHIDRA_HOME>/Ghidra/Processors/ARM/data/languages
+
+Instruction coverage: 0.580 (58/100)
+Register overlap    : 0.810 (17/21)
 ```
 
 Instruction coverage below 0.5 suggests mnemonic discovery (Node 3) missed a large portion of the ISA — consider re-running with a more comprehensive manual or increasing `TOP_K`.
 
 ---
 
-## Stage 7 — Batch Pipeline
+## Stage 7 — Checkpointed Stage Runner
 
-Run the full pipeline for multiple ISA targets defined in a YAML manifest.
+For long pipelines or debugging, `run-stage` lets you execute one node at a time and inspect state between stages.
 
 ```bash
-rosetta batch --manifest manifests/arm.yaml --out ./output
+# First stage: ingest (creates the checkpoint)
+rosetta run-stage ingest \
+  --db dbs/arm_test --name ARM_test --checkpoint state/arm.json \
+  --source manuals/arm_reference.pdf
+
+# Subsequent stages (reads checkpoint, adds output, saves back)
+rosetta run-stage meta        --name ARM_test --checkpoint state/arm.json
+rosetta run-stage registers   --name ARM_test --checkpoint state/arm.json
+rosetta run-stage mnemonics   --name ARM_test --checkpoint state/arm.json
+rosetta run-stage instructions --name ARM_test --checkpoint state/arm.json
+rosetta run-stage pcode       --name ARM_test --checkpoint state/arm.json
+rosetta run-stage generate    --name ARM_test --checkpoint state/arm.json --out ./output
+
+# Or run all remaining stages in one shot
+rosetta run-stage all --name ARM_test --checkpoint state/arm.json --out ./output
 ```
 
-Append `--skip-extraction` to re-use cached `*_isa_spec.json` files (skips LLM calls):
-```bash
-rosetta batch --manifest manifests/arm.yaml --out ./output --skip-extraction
-```
-
-Results are written to `./output/batch_results.json`.
+Each stage writes a snapshot (`ARM_test.<stage>.json`) alongside the checkpoint for inspection. The `--max-instructions` and `--inter-chunk-sleep` options are particularly useful when stepping through a large ISA manually.
 
 ---
 
 ## Stage 8 — Graph Results
 
-Visualise batch results or compare a generated spec against all Ghidra ARM variants.
+Compare a generated spec against all Ghidra ARM/AARCH64 variants.
 
 ```bash
-# Graph batch results
-rosetta graph --results ./output/batch_results.json --out ./output/report.png --no-display
-
-# Compare one spec against all Ghidra ARM/AARCH64 variants
-rosetta graph --slaspec ./output/ARM_test/data/languages/ARM_test.slaspec \
+rosetta graph ./output/ARM_test/data/languages/ARM_test.slaspec \
               --out ./output/arm_variants.png --no-display
 ```
 
-Use `--no-display` in headless/SSH environments. Omit `--out` to open an interactive matplotlib window.
+Use `--no-display` in headless/SSH environments. Omit `--out` to open an interactive matplotlib window. Add `--embeddings` to include semantic similarity scores (requires Ollama).
 
 ---
 
@@ -363,17 +373,21 @@ rosetta generate --db dbs/arm_test --name ARM_test --out ./output --concurrency 
 ## Quick Reference — All CLI Commands
 
 ```bash
-rosetta ingest  <manual.pdf>  --db <dir>
+rosetta ingest  <manual.pdf>  --db <dir>  [--source]
 rosetta generate              --db <dir> --name <Name> --out <dir>
                               [--spec-json <cache.json>]
                               [--concurrency N]
                               [--max-instructions N]
                               [--stop-after meta|registers|mnemonics|stubs|instructions]
+                              [--filter-mnemonics GLOBS]
+                              [--resume]
+                              [--append-slaspec <existing.slaspec>]
+rosetta run-stage <stage|all> --name <Name> --checkpoint <state.json>
+                              [--db <dir>] [--out <dir>] [--source <path>]
+                              [--reference <path>] [--max-instructions N]
 rosetta validate  <module_dir>
 rosetta install   <module_dir>  [--force]
 rosetta load-test <module_dir>  [--language-id ID]
-rosetta evaluate  <module_dir>  --reference <LANG_ID or .slaspec path>
-rosetta batch   --manifest <file.yaml> --out <dir>  [--skip-extraction]
-rosetta graph   --results <batch_results.json>  [--out img.png] [--no-display]
-rosetta graph   --slaspec  <generated.slaspec>  [--out img.png] [--no-display]
+rosetta evaluate  <module_dir>  --reference <LANG_ID|path|processor_name>
+rosetta graph     <generated.slaspec>  [--out img.png] [--no-display] [--embeddings]
 ```

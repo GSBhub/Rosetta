@@ -7,7 +7,7 @@ PDF manual
     │  rosetta ingest
     ▼
 ChromaDB vector store
-    │  rosetta generate (or rosetta batch)
+    │  rosetta generate
     ▼  (LangGraph StateGraph — meta/registers/mnemonics in parallel)
 ISASpec JSON  ──────────────────────────────────────────────────────────────┐
     │                                                                        │
@@ -18,7 +18,7 @@ Ghidra processor module (.slaspec / .pspec / .cspec / .ldefs)               │
 Compiled .sla                                                               │
     │  rosetta evaluate                                                      │
     ▼                                                                        │
-Similarity report (semantic · coverage · register overlap) ◄────────────────┘
+Similarity report (coverage · register overlap) ◄───────────────────────────┘
 ```
 
 ## Installation
@@ -63,7 +63,9 @@ Ghidra and the JDK can be placed under `tools/` (gitignored). The CLI auto-prepe
 rosetta ingest manuals/armv7_ref.pdf --db dbs/armv7
 ```
 
-`--db` is a **directory** (ChromaDB). Loads the PDF with `docquery`'s table-aware loader, chunks it, embeds the chunks, and writes to a ChromaDB persistent store. Re-ingesting the same file adds 0 new chunks (content-hash deduplication).
+`--db` is a **directory** (ChromaDB). Defaults to `CHROMA_DB_PATH` env var if unset. Loads the PDF with `docquery`'s table-aware loader, chunks it, embeds the chunks, and writes to a ChromaDB persistent store. Re-ingesting the same file adds 0 new chunks (content-hash deduplication).
+
+Use `--source` to ingest source code instead of a PDF — pass a directory and all `.c`, `.h`, `.cpp`, `.py` files are loaded as text chunks. Run `ingest` multiple times against the same `--db` to supplement an existing store with additional manuals.
 
 ### `rosetta generate` — extract ISA + generate processor module
 
@@ -75,9 +77,13 @@ Invokes the compiled LangGraph pipeline: after ingestion, **meta / registers / m
 
 Options:
 - `--spec-json PATH` — skip extraction, load a cached `isa_spec.json` directly
-- `--concurrency N` — max concurrent LLM calls during instruction extraction (default 4; use 1 on RAM-constrained systems)
+- `--concurrency N` — max concurrent LLM calls during instruction extraction (default 2; use 1 on RAM-constrained systems)
 - `--max-instructions N` — cap extraction at N instructions (useful for smoke tests)
 - `--stop-after STAGE` — stop early after `meta`, `registers`, `mnemonics`, `stubs`, or `instructions`
+- `--filter-mnemonics GLOBS` — comma-separated glob patterns to keep after mnemonic discovery, e.g. `MOV*,ADD,SUB*`
+- `--resume` — resume pass 4 from a partial JSONL save (skips already-extracted mnemonics)
+- `--append-slaspec PATH` — append new instruction constructors to an existing `.slaspec` instead of generating a full module
+- `--inter-chunk-sleep N` — seconds to sleep between pass-4 chunks (use 2.0 for local Ollama to allow KV-cache GC)
 
 ### `rosetta validate` — compile `.slaspec` with Ghidra's SLEIGH compiler
 
@@ -93,34 +99,33 @@ Runs `$GHIDRA_HOME/support/sleigh` to compile the `.slaspec` to `.sla`. Exits no
 rosetta evaluate ./output/ARM_v7_generated --reference ARM:LE:32:v7
 ```
 
-Computes three metrics against the corresponding Ghidra built-in spec:
+Computes two structural metrics against the corresponding Ghidra built-in spec:
 
 | Metric | Description |
 |--------|-------------|
-| **Semantic similarity** | Mean best-match cosine over chunked embeddings |
 | **Instruction coverage** | `|generated ∩ reference| / |reference|` |
 | **Register overlap** | Jaccard coefficient on register name sets |
 
-### `rosetta batch` — full pipeline for all targets in a manifest
+Both sides may be a single `.slaspec`, a `languages/` directory, a Ghidra language ID, or a bare processor name (e.g. `ARM` — unions all variants).
+
+### `rosetta run-stage` — checkpointed single-stage execution
 
 ```bash
-rosetta batch --manifest manifests/arm.yaml --out ./output
+rosetta run-stage ingest --db dbs/armv7 --name ARM_v7 --checkpoint state/arm.json --source manuals/armv7.pdf
+rosetta run-stage meta    --name ARM_v7 --checkpoint state/arm.json
+rosetta run-stage all     --name ARM_v7 --checkpoint state/arm.json
 ```
 
-Runs ingest → extract → generate → validate → evaluate for every target listed in the manifest, then prints a summary table and writes `output/batch_results.json`.
+Runs one pipeline stage at a time (or `all` to run the full sequence), persisting `PipelineState` to a checkpoint JSON between stages. Each invocation reads the previous stage's output from the checkpoint and adds its own. Per-stage snapshot files (`<name>.<stage>.json`) are written alongside the checkpoint for inspection.
+
+Valid stages: `ingest meta registers mnemonics instructions pcode generate validate evaluate`
 
 Options:
-- `--target ID` — run only the manifest target with this ID (e.g. `armv7`)
-- `--concurrency N` — Pass 4 LLM concurrency per target (default 1)
-- `--skip-extraction` — reuse cached `*_isa_spec.json` files (skip re-extraction)
-
-Example — run targets one at a time to limit RAM usage:
-
-```bash
-rosetta batch --manifest manifests/arm.yaml --target armv7 --out ./output --concurrency 1
-rosetta batch --manifest manifests/arm.yaml --target armv6 --out ./output --concurrency 1
-rosetta batch --manifest manifests/arm.yaml --target armv8_32 --out ./output --concurrency 1
-```
+- `--checkpoint PATH` — checkpoint file (required); created on first run
+- `--source PATH` — PDF or source directory (ingest stage only)
+- `--reference PATH` — reference `.slaspec` or language ID (evaluate stage)
+- `--max-instructions N` — cap instruction count (instructions stage)
+- `--inter-chunk-sleep N` — sleep between instruction chunks (default 2.0; helps Ollama KV GC)
 
 ### `rosetta install` — copy module into Ghidra
 
@@ -136,15 +141,14 @@ rosetta load-test ./output/ARM_v7_generated [--language-id ARM:LE:32:v7]
 
 Writes a minimal test binary and imports it into Ghidra headless to verify the processor module loads without errors.
 
-### `rosetta graph` — visualise batch results
+### `rosetta graph` — compare generated spec against all Ghidra ARM variants
 
 ```bash
-# Graph a batch_results.json
-rosetta graph --results ./output/batch_results.json
-
-# Compare one generated .slaspec against all Ghidra ARM variants
-rosetta graph --slaspec ./output/ARM_v7_generated/data/languages/ARM_v7_generated.slaspec
+rosetta graph ./output/ARM_v7_generated/data/languages/ARM_v7_generated.slaspec
+rosetta graph ./output/ARM_v7_generated/data/languages/ARM_v7_generated.slaspec --out report.png --no-display
 ```
+
+Takes a single `.slaspec` as a positional argument and compares it against every Ghidra ARM/AARCH64 variant. Use `--embeddings` to include semantic similarity (requires Ollama). Use `--no-display` in headless/SSH environments.
 
 ## Pipeline Architecture
 
@@ -168,7 +172,7 @@ START → ingest → ┌─ meta ──────────┐
 | `pcode` | `rosetta-pcode` | `pcode_hint` on each instruction — direct LLM call |
 | `generate_sla` | `rosetta-generate-sla` | `.slaspec`, `.pspec`, `.cspec`, `.ldefs` via Jinja2 |
 | `validate_sla` | `rosetta-validate-sla` | `compile_ok`, `compile_errors` — Ghidra sleigh subprocess |
-| `evaluate_sla` | `rosetta-evaluate-sla` | `semantic_similarity`, `instruction_coverage`, `register_overlap` |
+| `evaluate_sla` | `rosetta-evaluate-sla` | `instruction_coverage`, `register_overlap` |
 
 The mnemonic node uses a LangGraph inner graph with 10 query strategies (data-processing, memory, branch, multiply, alpha A–F, alpha G–N, alpha O–Z, SIMD/VFP, system/coprocessor) to find the full instruction set — a single-query approach typically finds only ~10% of ARM instructions.
 
@@ -199,28 +203,14 @@ output/
             └── ARM_v7_generated.ldefs     # Language definitions (ID, variant, compiler)
 ```
 
-## Batch Manifests
-
-YAML files under `manifests/` list pipeline targets. Paths support `$ENV_VAR` expansion:
-
-```yaml
-targets:
-  - id: armv7
-    name: ARM_v7_generated
-    manual: manuals/armv7_ref.pdf
-    db: dbs/armv7        # ChromaDB directory (no .db extension)
-    ghidra_reference_lang: ARM:LE:32:v7
-    reference_slaspec: $GHIDRA_HOME/Ghidra/Processors/ARM/data/languages/ARM7_le.slaspec
-```
-
 `dbs/`, `output/`, `manuals/`, `tools/`, and `*_isa_spec.json` are all gitignored — they are runtime artifacts.
 
 ## Development
 
 ```bash
-uv run pytest tests/     # root package tests (59 tests, no external services)
-uv run pytest packages/  # all workspace node package tests (100 tests, all mocked)
-uv run pytest tests/ packages/          # everything
+uv run pytest tests/     # root package tests
+uv run pytest packages/  # all workspace node package tests (all mocked)
+uv run pytest tests/ packages/          # everything (86 tests)
 uv run pytest -k "test_generate"        # by name
 uv run pytest packages/rosetta-mnemonics/tests/ -v  # single package
 ```

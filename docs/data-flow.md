@@ -29,7 +29,7 @@ flowchart TD
         PCODE["Node 5 — pcode\n(rosetta-pcode)\n→ InstructionDef.pcode_hint\n(direct LLM call)"]
         GENSLA["Node 6 — generate_sla\n(rosetta-generate-sla)\n→ lang_dir\n(Jinja2 renders 4 SLEIGH files)"]
         VALSLA["Node 7 — validate_sla\n(rosetta-validate-sla)\n→ compile_ok, compile_errors\n(Ghidra sleigh subprocess)"]
-        EVALSLA["Node 8 — evaluate_sla\n(rosetta-evaluate-sla)\n→ semantic_similarity\n   instruction_coverage\n   register_overlap"]
+        EVALSLA["Node 8 — evaluate_sla\n(rosetta-evaluate-sla)\n→ instruction_coverage\n   register_overlap"]
     end
 
     PDF --> INGEST
@@ -50,7 +50,7 @@ flowchart TD
 | `pcode` | `instructions`, `settings_dict`, `max_pcode` | `instructions` (updated), `errors` |
 | `generate_sla` | `meta`, `registers`, `instructions`, `processor_name`, `out_dir` | `lang_dir`, `errors` |
 | `validate_sla` | `lang_dir`, `ghidra_home` | `compile_ok`, `compile_errors`, `errors` |
-| `evaluate_sla` | `lang_dir`, `reference_slaspec`, `settings_dict` | `semantic_similarity`, `instruction_coverage`, `register_overlap`, `errors` |
+| `evaluate_sla` | `lang_dir`, `reference_slaspec`, `settings_dict` | `instruction_coverage`, `register_overlap`, `errors` |
 
 `errors` is accumulated — each node appends to the list from prior nodes.
 
@@ -138,9 +138,8 @@ rosetta/                         (uv workspace root)
 │   └── rosetta-evaluate-sla/    Node 8: cosine similarity + coverage metrics
 └── src/rosetta/
     ├── graph.py                 build_graph() / build_compiled_graph()
-    ├── cli.py                   CLI entry-points (ingest, generate, validate, …)
-    └── extraction/
-        └── isa_extractor.py     Legacy ISAExtractor (thin wrapper, still usable)
+    ├── stage_runner.py          checkpointed single-stage execution (run-stage CLI)
+    └── cli.py                   CLI entry-points (ingest, generate, run-stage, validate, …)
 ```
 
 ---
@@ -151,19 +150,21 @@ rosetta/                         (uv workspace root)
 |---|---|---|
 | `docquery.ingest()` | `.pdf` path or directory | ChromaDB collection populated |
 | `docquery.query()` | prompt + Pydantic schema | validated `BaseModel` instance |
-| `ISAExtractor.extract()` | db path (legacy path) | `ISASpec` (meta + registers + instructions) |
 | `ModuleGenerator.generate()` | `ISASpec` + processor name | `.slaspec`, `.pspec`, `.cspec`, `.ldefs` |
 | `compile_slaspec()` | `.slaspec` path + Ghidra home | `SleighResult(returncode, errors)` |
-| `similarity.compare()` | two `.slaspec` texts | `SimilarityReport(semantic_similarity, instruction_coverage, register_overlap)` |
+| `similarity.compare()` | two paths (file or directory) | `SimilarityReport(instruction_coverage, register_overlap)` |
 
 ---
 
 ## 5. Key Configuration (`.env`)
 
+These are the variable names consumed by `docquery` and rosetta. They are set in `.env` at the repo root and loaded by `cli.py` before any settings objects are instantiated.
+
 | Variable | Controls |
 |---|---|
 | `EMBED_PROVIDER` / `EMBED_MODEL` / `EMBED_BASE_URL` | Embedding model for ingest + retrieval |
-| `LLM_PROVIDER` / `LLM_MODEL` / `LLM_API_KEY` | LLM for all extraction passes |
+| `LLM_PROVIDER` / `LLM_MODEL` / `LLM_API_KEY` | LLM for all extraction passes (`LLM_API_KEY` = Anthropic API key when `LLM_PROVIDER=anthropic`) |
+| `CHROMA_DB_PATH` | Default `--db` for `ingest`, `generate`, and `run-stage` (avoids repeating it on every invocation) |
 | `CHUNK_SIZE` / `CHUNK_OVERLAP` | Text splitter parameters (default 1000/200) |
 | `TOP_K` | Chunks returned per RAG query (default 5) |
 | `MAX_RETRIES` | Retry budget per ExtractionPipeline call (default 3) |
