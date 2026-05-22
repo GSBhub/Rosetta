@@ -49,8 +49,14 @@ def _sanitize_pcode(hint: str) -> str:
     return s
 
 
-def _normalize_bit_fields(bit_fields: dict[str, str]) -> dict[str, str]:
-    """Return a cleaned bit_fields dict safe for SLEIGH token definitions."""
+def _normalize_bit_fields(bit_fields: dict[str, str], max_bit: int = 63) -> dict[str, str]:
+    """Return a cleaned bit_fields dict safe for SLEIGH token definitions.
+
+    Normalizes all ranges to canonical "high:low" format so the slaspec template's
+    `split(':') | reverse` filter always produces correct `(low, high)` SLEIGH output.
+    Skips fields whose bit positions exceed max_bit (e.g. LLM-generated binary patterns
+    like '11000011' that look like integers but are not bit positions).
+    """
     result: dict[str, str] = {}
     for name, bit_range in bit_fields.items():
         if not _VALID_IDENT.match(name):
@@ -59,18 +65,24 @@ def _normalize_bit_fields(bit_fields: dict[str, str]) -> dict[str, str]:
         # Skip anything with spaces (multi-range garbage like "0:2, 1:3").
         if ' ' in s or s.count(':') > 1:
             continue
-        # Single integer like "19" → normalize to "19:19".
+        # Single integer: only valid if within token bit range.
         if _SINGLE_INT.match(s):
-            s = f"{s}:{s}"
-        # Must now be exactly "high:low".
+            val = int(s)
+            if val > max_bit:
+                continue
+            s = f"{val}:{val}"
         parts = s.split(':')
         if len(parts) != 2:
             continue
         try:
-            int(parts[0]), int(parts[1])
+            a, b = int(parts[0]), int(parts[1])
         except ValueError:
             continue
-        result[name] = s
+        # Normalize to "high:low" regardless of LLM output order.
+        hi, lo = max(a, b), min(a, b)
+        if hi > max_bit:
+            continue
+        result[name] = f"{hi}:{lo}"
     return result
 
 
@@ -85,7 +97,7 @@ def _normalize_instruction(instr: InstructionDef) -> InstructionDef:
         ni.encoding_bits = ((ni.encoding_bits + 7) // 8) * 8
     # Mnemonics with spaces are parsed by SLEIGH as display + operand tokens.
     ni.mnemonic = ni.mnemonic.replace(" ", "_")
-    ni.bit_fields = _normalize_bit_fields(ni.bit_fields)
+    ni.bit_fields = _normalize_bit_fields(ni.bit_fields, max_bit=ni.encoding_bits - 1)
     # Bit constraints from LLM are unreliable (overlapping fields, wrong widths) and
     # produce SLEIGH "impossible to match" / "identical patterns" errors.  Clear them
     # all — every instruction falls back to a unique opXXstub=N pattern, which is safe.
@@ -202,19 +214,41 @@ class ModuleGenerator:
             "sp_register": sp,
         }
 
-        files = {
-            "processor.slaspec.j2": f"{processor_name}.slaspec",
-            "processor.pspec.j2": f"{processor_name}.pspec",
-            "processor.cspec.j2": f"{processor_name}.cspec",
-            "processor.ldefs.j2": f"{processor_name}.ldefs",
-        }
-
-        for template_name, out_filename in files.items():
-            tmpl = self._env.get_template(template_name)
-            rendered = tmpl.render(**ctx)
-            dest = lang_dir / out_filename
-            dest.write_text(rendered)
-            log.info("Wrote %s", dest)
+        if meta.endian == "bi":
+            # Generate both LE and BE slaspec files plus shared pspec/cspec/ldefs.
+            for endian_val, suffix in [("little", "_le"), ("big", "_be")]:
+                endian_meta = copy.copy(meta)
+                endian_meta.endian = endian_val  # type: ignore[assignment]
+                endian_ctx = {**ctx, "meta": endian_meta}
+                tmpl = self._env.get_template("processor.slaspec.j2")
+                rendered = tmpl.render(**endian_ctx)
+                dest = lang_dir / f"{processor_name}{suffix}.slaspec"
+                dest.write_text(rendered)
+                log.info("Wrote %s", dest)
+            shared_files = {
+                "processor.pspec.j2": f"{processor_name}.pspec",
+                "processor.cspec.j2": f"{processor_name}.cspec",
+                "processor.ldefs.j2": f"{processor_name}.ldefs",
+            }
+            for template_name, out_filename in shared_files.items():
+                tmpl = self._env.get_template(template_name)
+                rendered = tmpl.render(**ctx)
+                dest = lang_dir / out_filename
+                dest.write_text(rendered)
+                log.info("Wrote %s", dest)
+        else:
+            files = {
+                "processor.slaspec.j2": f"{processor_name}.slaspec",
+                "processor.pspec.j2": f"{processor_name}.pspec",
+                "processor.cspec.j2": f"{processor_name}.cspec",
+                "processor.ldefs.j2": f"{processor_name}.ldefs",
+            }
+            for template_name, out_filename in files.items():
+                tmpl = self._env.get_template(template_name)
+                rendered = tmpl.render(**ctx)
+                dest = lang_dir / out_filename
+                dest.write_text(rendered)
+                log.info("Wrote %s", dest)
 
         log.info("Module generated in %s", lang_dir)
         return lang_dir

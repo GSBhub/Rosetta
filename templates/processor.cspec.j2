@@ -26,7 +26,7 @@
   <stackpointer register="{{ sp_register }}" space="ram"/>
 
   <default_proto>
-    <proto name="__default" extrapop="0" stackshift="0">
+    <prototype name="__default" extrapop="0" stackshift="0">
       <input>
         <pentry minsize="1" maxsize="{{ (meta.word_size_bits // 8) | int }}">
           <register name="{{ registers[0].name if registers else 'R0' }}"/>
@@ -47,6 +47,6 @@
         <register name="{{ reg.name }}"/>
 {% endfor %}
       </unaffected>
-    </proto>
+    </prototype>
   </default_proto>
 </compiler_spec>

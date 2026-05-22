@@ -22,7 +22,9 @@ _SYSTEM_PROMPT = (
 _QUERY = (
     "What is the endianness (little or big), native word size in bits, "
     "minimum instruction alignment in bytes, and all possible instruction "
-    "widths in bits for this ISA? Also provide a short ISA name."
+    "widths in bits for this ISA? Also provide a short ISA name and a "
+    "short version/variant identifier (e.g. 'v7', 'v8', 'v8A', 'Cortex-M', "
+    "'default' if unknown). Use only alphanumeric characters and hyphens."
 )
 
 
@@ -56,4 +58,5 @@ def _fallback() -> ISAMeta:
         word_size_bits=32,
         alignment=4,
         instruction_sizes_bits=[32],
+        variant="default",
     )

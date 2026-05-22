@@ -96,19 +96,41 @@ class ModuleGenerator:
             "sp_register": sp,
         }
 
-        files_map = {
-            "processor.slaspec.j2": f"{processor_name}.slaspec",
-            "processor.pspec.j2": f"{processor_name}.pspec",
-            "processor.cspec.j2": f"{processor_name}.cspec",
-            "processor.ldefs.j2": f"{processor_name}.ldefs",
-        }
-
-        for template_name, out_filename in files_map.items():
-            tmpl = self._env.get_template(template_name)
-            rendered = tmpl.render(**ctx)
-            dest = lang_dir / out_filename
-            dest.write_text(rendered)
-            log.info("Wrote %s", dest)
+        if meta.endian == "bi":
+            # Generate both LE and BE slaspec files plus shared pspec/cspec/ldefs.
+            for endian_val, suffix in [("little", "_le"), ("big", "_be")]:
+                endian_meta = copy.copy(meta)
+                endian_meta.endian = endian_val  # type: ignore[assignment]
+                endian_ctx = {**ctx, "meta": endian_meta}
+                tmpl = self._env.get_template("processor.slaspec.j2")
+                rendered = tmpl.render(**endian_ctx)
+                dest = lang_dir / f"{processor_name}{suffix}.slaspec"
+                dest.write_text(rendered)
+                log.info("Wrote %s", dest)
+            shared_files = {
+                "processor.pspec.j2": f"{processor_name}.pspec",
+                "processor.cspec.j2": f"{processor_name}.cspec",
+                "processor.ldefs.j2": f"{processor_name}.ldefs",
+            }
+            for template_name, out_filename in shared_files.items():
+                tmpl = self._env.get_template(template_name)
+                rendered = tmpl.render(**ctx)
+                dest = lang_dir / out_filename
+                dest.write_text(rendered)
+                log.info("Wrote %s", dest)
+        else:
+            files_map = {
+                "processor.slaspec.j2": f"{processor_name}.slaspec",
+                "processor.pspec.j2": f"{processor_name}.pspec",
+                "processor.cspec.j2": f"{processor_name}.cspec",
+                "processor.ldefs.j2": f"{processor_name}.ldefs",
+            }
+            for template_name, out_filename in files_map.items():
+                tmpl = self._env.get_template(template_name)
+                rendered = tmpl.render(**ctx)
+                dest = lang_dir / out_filename
+                dest.write_text(rendered)
+                log.info("Wrote %s", dest)
 
         log.info("Module generated in %s", lang_dir)
         return lang_dir

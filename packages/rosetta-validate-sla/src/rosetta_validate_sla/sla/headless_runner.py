@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -36,8 +37,9 @@ def run_headless(
     post_script: Path | None = None,
     project_dir: Path | None = None,
     project_name: str = "rosetta_tmp",
+    analyze: bool = False,
 ) -> HeadlessResult:
-    """Import and analyze binary_path using the given Ghidra language_id."""
+    """Import (and optionally analyze) binary_path using the given Ghidra language_id."""
     headless = _find_headless(ghidra_home)
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -46,13 +48,20 @@ def run_headless(
             str(headless), proj_dir, project_name,
             "-import", str(binary_path),
             "-processor", language_id,
-            "-noanalysis",
         ]
+        if not analyze:
+            cmd.append("-noanalysis")
         if post_script:
             cmd += ["-postScript", str(post_script)]
 
+        env = os.environ.copy()
+        java_home = env.get("JAVA_HOME", "")
+        if java_home:
+            java_bin = str(Path(java_home) / "bin")
+            env["PATH"] = java_bin + os.pathsep + env.get("PATH", "")
+
         log.info("Running headless: %s", " ".join(cmd))
-        proc = subprocess.run(cmd, capture_output=True, text=True)
+        proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
 
     result = HeadlessResult(returncode=proc.returncode, stdout=proc.stdout, stderr=proc.stderr)
     if result.ok:

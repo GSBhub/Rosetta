@@ -7,15 +7,9 @@
 
   <programcounter register="{{ pc_register }}"/>
 
-  <context_data>
-    <context_set space="ram">
-      <set name="TMode" val="0"/>
-    </context_set>
-  </context_data>
-
   <register_data>
 {% for reg in registers %}
-    <register name="{{ reg.name }}" rename="{{ reg.name }}" group="General Purpose"/>
+    <register name="{{ reg.name }}" group="General Purpose"/>
 {% endfor %}
   </register_data>
 </processor_spec>

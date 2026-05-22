@@ -7,11 +7,18 @@ from pydantic import BaseModel, Field
 
 class ISAMeta(BaseModel):
     name: str = Field(description="Human-readable ISA name, e.g. 'ARM Cortex-M'")
-    endian: Literal["little", "big"] = Field(description="Byte order")
+    endian: Literal["little", "big", "bi"] = Field(
+        description="Byte order; 'bi' generates both LE and BE variants"
+    )
     word_size_bits: int = Field(description="Native word size in bits (32 or 64)")
     alignment: int = Field(description="Minimum instruction alignment in bytes")
     instruction_sizes_bits: list[int] = Field(
         description="Possible instruction widths in bits, e.g. [16, 32] for Thumb+ARM"
+    )
+    variant: str = Field(
+        default="default",
+        description="ISA version variant for the Ghidra language ID, e.g. 'v7', 'v8', 'Cortex'. "
+                    "Appears as the 4th segment: PROCESSOR:ENDIAN:SIZE:variant",
     )
 
 

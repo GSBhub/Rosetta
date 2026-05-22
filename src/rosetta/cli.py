@@ -136,8 +136,8 @@ def _generate_or_append(spec, name: str, out_dir: Path, append_slaspec: str | No
 
 
 @cli.command()
-@click.option("--db", default=lambda: os.environ.get("CHROMA_DB_PATH"), required=True,
-              help="ChromaDB directory path (overrides CHROMA_DB_PATH env var)")
+@click.option("--db", default=lambda: os.environ.get("CHROMA_DB_PATH"),
+              help="ChromaDB directory path (overrides CHROMA_DB_PATH env var); not required when --spec-json is used")
 @click.option("--name", required=True, help="Processor name (used as file prefix)")
 @click.option("--out", default="./output", show_default=True, help="Output directory")
 @click.option("--spec-json", default=None, help="Load existing isa_spec.json (skip extraction)")
@@ -161,6 +161,9 @@ def _generate_or_append(spec, name: str, out_dir: Path, append_slaspec: str | No
 @click.option("--llm-base-url", default=None, help="Override LLM_BASE_URL env var")
 @click.option("--embed-model", default=None, help="Override EMBED_MODEL env var")
 @click.option("--embed-base-url", default=None, help="Override EMBED_BASE_URL env var")
+@click.option("--variant", default=None,
+    help="Override the ISA variant segment in the Ghidra language ID (e.g. 'v7', 'v8'). "
+         "Defaults to whatever was extracted from the manual.")
 def generate(
     db: str,
     name: str,
@@ -180,6 +183,7 @@ def generate(
     llm_base_url: str | None,
     embed_model: str | None,
     embed_base_url: str | None,
+    variant: str | None,
 ) -> None:
     """Extract ISA from database and generate a Ghidra processor module."""
     import dataclasses
@@ -189,18 +193,23 @@ def generate(
     from rosetta_schemas.state import get_isa_spec
 
     _apply_model_overrides(llm_model, llm_base_url, embed_model, embed_base_url)
-    settings = Settings()
-    settings.db_path = db
     out_dir = Path(out)
-    debug_dir = Path(db).parent
 
     # ── Fast paths that bypass the LangGraph pipeline ──────────────────────
     if spec_json:
         click.echo(f"Loading ISASpec from {spec_json}")
         from rosetta_schemas.models import ISASpec
         spec = ISASpec.model_validate(_json.loads(Path(spec_json).read_text()))
+        if variant:
+            spec.meta.variant = variant
         _generate_or_append(spec, name, out_dir, append_slaspec)
         return
+
+    if not db:
+        raise click.UsageError("--db is required when --spec-json is not provided")
+    settings = Settings()
+    settings.db_path = db
+    debug_dir = Path(db).parent
 
     # ── Build initial pipeline state ────────────────────────────────────────
     settings_dict = dataclasses.asdict(settings)
@@ -243,6 +252,8 @@ def generate(
     # ── Cache ISASpec ───────────────────────────────────────────────────────
     spec = get_isa_spec(final_state)
     if spec:
+        if variant:
+            spec.meta.variant = variant
         cache = debug_dir / f"{name}_isa_spec.json"
         cache.write_text(spec.model_dump_json(indent=2))
         click.echo(f"ISASpec cached to {cache}")
@@ -500,6 +511,8 @@ def install(module_dir: str, force: bool) -> None:
         shutil.rmtree(dest)
 
     shutil.copytree(src, dest)
+    # Ghidra requires Module.manifest to exist (even empty) to discover the processor.
+    (dest / "Module.manifest").touch(exist_ok=True)
     click.echo(f"Installed {proc_name} → {dest}")
 
     # Verify the .sla file exists (sleigh must have been run first)
@@ -544,7 +557,19 @@ def _make_test_binary(path: Path, endian: str = "little") -> None:
     type=click.Choice(["little", "big"]),
     help="Endianness for the test binary",
 )
-def load_test(module_dir: str, language_id: str | None, endian: str) -> None:
+@click.option(
+    "--analyze",
+    is_flag=True,
+    default=False,
+    help="Run full Ghidra auto-analysis (disassembly + function detection) instead of just import",
+)
+@click.option(
+    "--binary",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False),
+    help="Path to a binary to analyze (defaults to a generated minimal ARM test binary)",
+)
+def load_test(module_dir: str, language_id: str | None, endian: str, analyze: bool, binary: str | None) -> None:
     """Import a test binary into Ghidra headless using the installed processor.
 
     Verifies that the generated processor module loads without errors.
@@ -594,26 +619,36 @@ def load_test(module_dir: str, language_id: str | None, endian: str) -> None:
         sys.exit(1)
 
     with tempfile.TemporaryDirectory() as tmp:
-        # Write tiny test binary
-        binary = Path(tmp) / "test.bin"
-        _make_test_binary(binary, endian=endian)
-        click.echo(f"Test binary : {binary} ({binary.stat().st_size} bytes)")
+        # Use provided binary or generate a minimal test binary
+        if binary:
+            bin_path = Path(binary)
+        else:
+            bin_path = Path(tmp) / "test.bin"
+            _make_test_binary(bin_path, endian=endian)
+        click.echo(f"Test binary : {bin_path} ({bin_path.stat().st_size} bytes)")
+        if analyze:
+            click.echo("Mode        : full analysis (disassembly + function detection)")
 
         # Run headless
         click.echo(f"Running Ghidra headless ...")
         result = run_headless(
-            binary_path=binary,
+            binary_path=bin_path,
             language_id=language_id,
             ghidra_home=settings.ghidra_home,
             project_dir=Path(tmp),
             project_name="rosetta_load_test",
+            analyze=analyze,
         )
 
     if result.ok:
-        click.echo("PASS — processor loaded successfully")
+        verb = "analyzed" if analyze else "loaded"
+        click.echo(f"PASS — processor {verb} successfully")
+        if analyze:
+            for line in (result.stdout + result.stderr).splitlines():
+                if any(kw in line for kw in ("Disassembl", "Function", "instruction", "ANALYZING", "DONE")):
+                    click.echo(f"  {line.strip()}")
     else:
         click.echo("FAIL — Ghidra returned a non-zero exit code", err=True)
-        # Surface the first relevant error line
         for line in (result.stdout + result.stderr).splitlines():
             if any(kw in line for kw in ("ERROR", "error", "Exception", "not found", "WARN")):
                 click.echo(f"  {line}", err=True)
