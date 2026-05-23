@@ -5,7 +5,7 @@ from typing import Annotated, Any
 
 from typing_extensions import TypedDict
 
-from rosetta_schemas.models import ISAMeta, ISASpec, InstructionDef, RegisterDef
+from rosetta_schemas.models import ISAMeta, ISASpec, InstructionDef, OpcodeDef, RegisterDef
 
 
 class PipelineState(TypedDict, total=False):
@@ -34,6 +34,7 @@ class PipelineState(TypedDict, total=False):
     registers: list[dict[str, Any]]
     mnemonics: list[str]
     instructions: list[dict[str, Any]]
+    opcode_map: list[dict[str, Any]]    # OpcodeDef rows for opcode_table ISAs
 
     # ── Downstream stage outputs ──────────────────────────────────────────────
     lang_dir: str | None        # path to generated languages/ directory
@@ -68,6 +69,10 @@ def get_instructions(state: PipelineState) -> list[InstructionDef]:
     return [InstructionDef.model_validate(i) for i in state.get("instructions", [])]
 
 
+def get_opcode_map(state: PipelineState) -> list[OpcodeDef]:
+    return [OpcodeDef.model_validate(o) for o in state.get("opcode_map", [])]
+
+
 def get_isa_spec(state: PipelineState) -> ISASpec | None:
     meta = get_meta(state)
     if not meta:
@@ -76,4 +81,5 @@ def get_isa_spec(state: PipelineState) -> ISASpec | None:
         meta=meta,
         registers=get_registers(state),
         instructions=get_instructions(state),
+        opcode_map=get_opcode_map(state),
     )

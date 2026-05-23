@@ -17,12 +17,14 @@ resolution-markers = [
 [manifest]
 members = [
     "rosetta",
+    "rosetta-classify",
     "rosetta-evaluate-sla",
     "rosetta-generate-sla",
     "rosetta-ingest",
     "rosetta-instructions",
     "rosetta-meta",
     "rosetta-mnemonics",
+    "rosetta-opcode-map",
     "rosetta-pcode",
     "rosetta-registers",
     "rosetta-schemas",
@@ -3329,12 +3331,14 @@ dependencies = [
     { name = "pydantic" },
     { name = "pytest" },
     { name = "pyyaml" },
+    { name = "rosetta-classify" },
     { name = "rosetta-evaluate-sla" },
     { name = "rosetta-generate-sla" },
     { name = "rosetta-ingest" },
     { name = "rosetta-instructions" },
     { name = "rosetta-meta" },
     { name = "rosetta-mnemonics" },
+    { name = "rosetta-opcode-map" },
     { name = "rosetta-pcode" },
     { name = "rosetta-registers" },
     { name = "rosetta-schemas" },
@@ -3352,17 +3356,36 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "pyyaml", specifier = ">=6.0" },
+    { name = "rosetta-classify", editable = "packages/rosetta-classify" },
     { name = "rosetta-evaluate-sla", editable = "packages/rosetta-evaluate-sla" },
     { name = "rosetta-generate-sla", editable = "packages/rosetta-generate-sla" },
     { name = "rosetta-ingest", editable = "packages/rosetta-ingest" },
     { name = "rosetta-instructions", editable = "packages/rosetta-instructions" },
     { name = "rosetta-meta", editable = "packages/rosetta-meta" },
     { name = "rosetta-mnemonics", editable = "packages/rosetta-mnemonics" },
+    { name = "rosetta-opcode-map", editable = "packages/rosetta-opcode-map" },
     { name = "rosetta-pcode", editable = "packages/rosetta-pcode" },
     { name = "rosetta-registers", editable = "packages/rosetta-registers" },
     { name = "rosetta-schemas", editable = "packages/rosetta-schemas" },
     { name = "rosetta-utils", editable = "packages/rosetta-utils" },
     { name = "rosetta-validate-sla", editable = "packages/rosetta-validate-sla" },
+]
+
+[[package]]
+name = "rosetta-classify"
+version = "0.1.0"
+source = { editable = "packages/rosetta-classify" }
+dependencies = [
+    { name = "docquery" },
+    { name = "rosetta-schemas" },
+    { name = "rosetta-utils" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "docquery", git = "https://github.com/gsbhub/docquery" },
+    { name = "rosetta-schemas", editable = "packages/rosetta-schemas" },
+    { name = "rosetta-utils", editable = "packages/rosetta-utils" },
 ]
 
 [[package]]
@@ -3465,6 +3488,23 @@ dependencies = [
 requires-dist = [
     { name = "docquery", git = "https://github.com/gsbhub/docquery" },
     { name = "langgraph", specifier = ">=0.2" },
+    { name = "rosetta-schemas", editable = "packages/rosetta-schemas" },
+    { name = "rosetta-utils", editable = "packages/rosetta-utils" },
+]
+
+[[package]]
+name = "rosetta-opcode-map"
+version = "0.1.0"
+source = { editable = "packages/rosetta-opcode-map" }
+dependencies = [
+    { name = "docquery" },
+    { name = "rosetta-schemas" },
+    { name = "rosetta-utils" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "docquery", git = "https://github.com/gsbhub/docquery" },
     { name = "rosetta-schemas", editable = "packages/rosetta-schemas" },
     { name = "rosetta-utils", editable = "packages/rosetta-utils" },
 ]

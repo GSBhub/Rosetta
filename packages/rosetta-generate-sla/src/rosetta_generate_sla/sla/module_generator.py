@@ -87,10 +87,14 @@ class ModuleGenerator:
         meta = copy.copy(spec.meta)
         meta.instruction_sizes_bits = all_widths
 
+        is_cisc = meta.encoding_style == "opcode_table"
+        slaspec_template = "processor.slaspec.cisc.j2" if is_cisc else "processor.slaspec.j2"
+
         ctx = {
             "meta": meta,
             "registers": spec.registers,
             "instructions": normalized_instructions,
+            "opcode_map": spec.opcode_map,
             "processor_name": processor_name,
             "pc_register": pc,
             "sp_register": sp,
@@ -102,7 +106,7 @@ class ModuleGenerator:
                 endian_meta = copy.copy(meta)
                 endian_meta.endian = endian_val  # type: ignore[assignment]
                 endian_ctx = {**ctx, "meta": endian_meta}
-                tmpl = self._env.get_template("processor.slaspec.j2")
+                tmpl = self._env.get_template(slaspec_template)
                 rendered = tmpl.render(**endian_ctx)
                 dest = lang_dir / f"{processor_name}{suffix}.slaspec"
                 dest.write_text(rendered)
@@ -120,10 +124,10 @@ class ModuleGenerator:
                 log.info("Wrote %s", dest)
         else:
             files_map = {
-                "processor.slaspec.j2": f"{processor_name}.slaspec",
-                "processor.pspec.j2": f"{processor_name}.pspec",
-                "processor.cspec.j2": f"{processor_name}.cspec",
-                "processor.ldefs.j2": f"{processor_name}.ldefs",
+                slaspec_template:       f"{processor_name}.slaspec",
+                "processor.pspec.j2":  f"{processor_name}.pspec",
+                "processor.cspec.j2":  f"{processor_name}.cspec",
+                "processor.ldefs.j2":  f"{processor_name}.ldefs",
             }
             for template_name, out_filename in files_map.items():
                 tmpl = self._env.get_template(template_name)

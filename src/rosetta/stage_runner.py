@@ -30,6 +30,14 @@ def _import_meta():
     from rosetta_meta.node import meta_node
     return meta_node
 
+def _import_classify():
+    from rosetta_classify.node import classify_node
+    return classify_node
+
+def _import_opcode_map():
+    from rosetta_opcode_map.node import opcode_map_node
+    return opcode_map_node
+
 def _import_registers():
     from rosetta_registers.node import registers_node
     return registers_node
@@ -63,8 +71,10 @@ def _import_evaluate():
 STAGE_REGISTRY: dict[str, tuple[Callable, list[str]]] = {
     "ingest":       (_import_ingest,       ["source_path", "db_path"]),
     "meta":         (_import_meta,         ["db_path"]),
+    "classify":     (_import_classify,     ["meta", "db_path"]),
     "registers":    (_import_registers,    ["db_path"]),
     "mnemonics":    (_import_mnemonics,    ["db_path"]),
+    "opcode_map":   (_import_opcode_map,   ["meta", "db_path"]),
     "instructions": (_import_instructions, ["mnemonics", "db_path"]),
     "pcode":        (_import_pcode,        ["instructions"]),
     "generate":     (_import_generate,     ["meta", "processor_name", "out_dir"]),
@@ -127,6 +137,7 @@ def _find_producer(key: str) -> str | None:
         "meta": "meta",
         "registers": "registers",
         "mnemonics": "mnemonics",
+        "opcode_map": "opcode_map",
         "instructions": "instructions",
         "lang_dir": "generate",
         "ghidra_home": "initial state (pass --checkpoint with ghidra_home set)",
@@ -161,6 +172,26 @@ def summarize_and_warn(stage: str, state: dict[str, Any]) -> None:
         else:
             log.info("meta: name=%r endian=%s word_size=%s",
                      name, meta.get("endian"), meta.get("word_size_bits"))
+
+    elif stage == "classify":
+        meta = state.get("meta") or {}
+        style = meta.get("encoding_style", "unknown")
+        if style == "unknown":
+            log.warning("classify: encoding_style not set — LLM may have failed")
+        else:
+            log.info("classify: encoding_style=%r", style)
+
+    elif stage == "opcode_map":
+        om = state.get("opcode_map") or []
+        mn = state.get("mnemonics") or []
+        if not om:
+            meta = state.get("meta") or {}
+            if meta.get("encoding_style") == "opcode_table":
+                log.warning("opcode_map: empty — extraction failed for opcode_table ISA")
+            else:
+                log.info("opcode_map: skipped (encoding_style=%r)", meta.get("encoding_style"))
+        else:
+            log.info("opcode_map: %d entries, %d unique mnemonics", len(om), len(mn))
 
     elif stage == "registers":
         regs = state.get("registers") or []

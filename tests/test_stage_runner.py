@@ -261,8 +261,8 @@ def test_build_initial_state_omits_source_when_none():
 # ---------------------------------------------------------------------------
 
 def test_stage_order_covers_all_pipeline_nodes():
-    expected = ["ingest", "meta", "registers", "mnemonics", "instructions",
-                "pcode", "generate", "validate", "evaluate"]
+    expected = ["ingest", "meta", "classify", "registers", "mnemonics",
+                "opcode_map", "instructions", "pcode", "generate", "validate", "evaluate"]
     assert STAGE_ORDER == expected
 
 
