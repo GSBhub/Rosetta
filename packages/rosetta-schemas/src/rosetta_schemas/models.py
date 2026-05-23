@@ -31,6 +31,14 @@ class ISAMeta(BaseModel):
             "'variable_prefix': multi-byte opcode with prefix bytes (x86)."
         ),
     )
+    opcode_prefixes: list[int] = Field(
+        default_factory=list,
+        description=(
+            "Prefix bytes that introduce secondary opcode tables, e.g. [0xCE, 0xCF] for M37700. "
+            "Each value causes a full 256-entry scan of the prefixed opcode space. "
+            "Empty for ISAs without prefix bytes."
+        ),
+    )
 
 
 class OpcodeDef(BaseModel):

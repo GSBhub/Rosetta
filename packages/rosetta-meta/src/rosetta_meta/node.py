@@ -24,7 +24,10 @@ _QUERY = (
     "minimum instruction alignment in bytes, and all possible instruction "
     "widths in bits for this ISA? Also provide a short ISA name and a "
     "short version/variant identifier (e.g. 'v7', 'v8', 'v8A', 'Cortex-M', "
-    "'default' if unknown). Use only alphanumeric characters and hyphens."
+    "'default' if unknown). Use only alphanumeric characters and hyphens. "
+    "If this ISA uses one-byte prefix values to select a secondary opcode table "
+    "(e.g. 0xCE or 0xCF for M37700, 0x0F for x86), list those prefix byte values "
+    "as integers in opcode_prefixes; otherwise return an empty list."
 )
 
 

@@ -42,13 +42,26 @@ def opcode_map_node(state: PipelineState) -> dict[str, Any]:
         sleep = float(state.get("inter_chunk_sleep") or 1.0)
         entries = extract_opcode_map(settings, prefix=None, inter_row_sleep=sleep)
 
+        # Extract secondary opcode tables introduced by prefix bytes (e.g. CE/CF on M37700).
+        prefixes: list[int] = meta.opcode_prefixes or []
+        for pfx in prefixes:
+            log.info("opcode_map_node: extracting prefix-0x%02X table", pfx)
+            prefixed = extract_opcode_map(settings, prefix=pfx, inter_row_sleep=sleep)
+            # Stamp the prefix onto any entries the LLM forgot to set it on.
+            for e in prefixed:
+                if e.prefix is None:
+                    e.prefix = pfx
+            entries.extend(prefixed)
+            log.info("opcode_map_node: prefix 0x%02X — %d entries", pfx, len(prefixed))
+
         # Derive mnemonics list as a side effect so downstream nodes that
         # expect 'mnemonics' still see a populated list.
         mnemonics = sorted({e.mnemonic for e in entries if e.mnemonic != "UNK"})
 
         log.info(
-            "opcode_map_node: %d opcode entries, %d unique mnemonics",
+            "opcode_map_node: %d total opcode entries (%d prefixes), %d unique mnemonics",
             len(entries),
+            len(prefixes),
             len(mnemonics),
         )
         return {
