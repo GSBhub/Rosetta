@@ -47,10 +47,14 @@ Rel16: target  is sw1   [ target = inst_next + sw1;  ]  { export *[ram]:{{ meta.
 {%- elif mode in ("abs,Y", "absolute,Y", "absolute+Y") -%}; w1
 {%- elif mode in ("(abs)", "(absolute)", "absolute indirect") -%}; w1
 {%- elif mode in ("(abs,X)", "(absolute,X)", "absolute indirect indexed") -%}; w1
+{%- elif mode in ("(abs),Y", "(absolute),Y", "absolute indirect indexed Y") -%}; w1
+{%- elif mode in ("(long),Y", "absolute long indirect indexed Y") -%}; l1
 {%- elif mode in ("rel", "rel8", "relative", "pcr8") -%}; Rel8
 {%- elif mode in ("rel16", "pcr16", "long relative") -%}; Rel16
 {%- elif mode in ("long", "abs24", "absolute long", "long absolute") -%}; l1
 {%- elif mode in ("long,X", "abs24,X", "absolute long,X") -%}; l1
+{%- elif mode in ("long,Y", "abs24,Y", "absolute long,Y") -%}; l1
+{%- elif mode in ("(long,X)", "(abs24,X)") -%}; l1
 {%- elif mode in ("sr", "stk", "stack relative", "stack,S") -%}; b1
 {%- elif mode in ("(sr),Y", "(stk),Y", "stack relative indirect indexed") -%}; b1
 {%- elif mode in ("mvn", "mvp", "block move") -%}; b1; b1
@@ -75,10 +79,14 @@ Rel16: target  is sw1   [ target = inst_next + sw1;  ]  { export *[ram]:{{ meta.
 {%- elif mode in ("abs,Y", "absolute,Y", "absolute+Y") -%} w1,"Y"
 {%- elif mode in ("(abs)", "(absolute)", "absolute indirect") -%} (w1)
 {%- elif mode in ("(abs,X)", "(absolute,X)", "absolute indirect indexed") -%} (w1,"X")
+{%- elif mode in ("(abs),Y", "(absolute),Y", "absolute indirect indexed Y") -%} (w1),"Y"
 {%- elif mode in ("rel", "rel8", "relative", "pcr8") -%} Rel8
 {%- elif mode in ("rel16", "pcr16", "long relative") -%} Rel16
 {%- elif mode in ("long", "abs24", "absolute long", "long absolute") -%} l1
 {%- elif mode in ("long,X", "abs24,X") -%} l1,"X"
+{%- elif mode in ("long,Y", "abs24,Y", "absolute long,Y") -%} l1,"Y"
+{%- elif mode in ("(long,X)", "(abs24,X)") -%} (l1,"X")
+{%- elif mode in ("(long),Y", "(abs24),Y", "absolute long indirect Y") -%} (l1),"Y"
 {%- elif mode in ("sr", "stk", "stack relative", "stack,S") -%} b1,"S"
 {%- elif mode in ("(sr),Y", "(stk),Y") -%} (b1,"S"),"Y"
 {%- elif mode in ("mvn", "mvp", "block move") -%} b1,b1
@@ -105,7 +113,7 @@ Rel16: target  is sw1   [ target = inst_next + sw1;  ]  { export *[ram]:{{ meta.
 {%- if entry.mnemonic != "UNK" %}
 {%- set display = _mode_display(entry.mode) %}
 {%- set tokens  = _mode_tokens(entry.mode) %}
-{%- set body    = _mode_body(entry.mnemonic, entry.mode) %}
+{%- set body    = entry.pcode_body if entry.pcode_body else _mode_body(entry.mnemonic, entry.mode) %}
 {%- if entry.prefix is not none %}
 :{{ entry.mnemonic }}{% if display %} {{ display }}{% endif %}  is opcode=0x{{ "%02X" | format(entry.prefix) }}; b1=0x{{ "%02X" | format(entry.opcode) }}{{ tokens }}  { {{ body }} }
 {% else %}
