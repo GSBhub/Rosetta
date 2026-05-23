@@ -66,6 +66,29 @@ def _row_query(row: int, prefix: int | None) -> str:
     )
 
 
+def extract_opcode_row(
+    settings: Any,
+    row: int,
+    prefix: int | None = None,
+) -> list[OpcodeDef]:
+    """Extract exactly one row (16 opcodes) via RAG similarity search."""
+    import docquery
+
+    query = _row_query(row, prefix)
+    try:
+        result = docquery.query(
+            query,
+            schema=_OpcodeRow,
+            system_prompt=_SYSTEM_PROMPT,
+            settings=settings,
+        )
+        if isinstance(result, _OpcodeRow):
+            return result.entries
+    except Exception as exc:
+        log.warning("opcode_map: row 0x%Xx failed: %s", row, exc)
+    return []
+
+
 def extract_opcode_map(
     settings: Any,
     prefix: int | None = None,
