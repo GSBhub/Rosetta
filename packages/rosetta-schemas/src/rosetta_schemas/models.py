@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 EncodingStyle = Literal["opcode_table", "fixed_word", "variable_prefix"]
 
@@ -42,6 +42,14 @@ class OpcodeDef(BaseModel):
         description="Prefix byte for multi-byte opcode tables, e.g. 0x89 for M7700 MPY group",
     )
     mnemonic: str = Field(description="Instruction mnemonic, e.g. 'LDA'")
+
+    @field_validator("mnemonic")
+    @classmethod
+    def _strip_mnemonic(cls, v: str) -> str:
+        """Keep only the first word and uppercase it — LLMs sometimes embed operand syntax."""
+        word = v.strip().split()[0] if v.strip() else "UNK"
+        return word.upper()
+
     mode: str = Field(
         description=(
             "Addressing mode identifier, e.g. 'imp', 'imm', 'dp', 'dp,X', 'abs', "

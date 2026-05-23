@@ -6,7 +6,7 @@ import logging
 import time
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from rosetta_schemas.models import OpcodeDef
 
@@ -23,6 +23,23 @@ class _OpcodeRow(BaseModel):
     entries: list[OpcodeDef] = Field(
         description="The opcode table entries for this row of 16 opcodes"
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def coerce_entries(cls, data: Any) -> Any:
+        """Accept any top-level list or dict-with-a-single-list-value the LLM returns."""
+        if isinstance(data, list):
+            return {"entries": data}
+        if isinstance(data, dict) and "entries" not in data:
+            # Case 1: wrong key name with a list value → {"opcode_row": [...]}
+            for v in data.values():
+                if isinstance(v, list):
+                    return {"entries": v}
+            # Case 2: dict-of-dicts keyed by opcode → {"70": {"mnemonic": ...}, ...}
+            dicts = [v for v in data.values() if isinstance(v, dict)]
+            if dicts:
+                return {"entries": dicts}
+        return data
 
 
 def _row_query(row: int, prefix: int | None) -> str:
