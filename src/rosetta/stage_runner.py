@@ -38,6 +38,10 @@ def _import_opcode_map():
     from rosetta_opcode_map.node import opcode_map_node
     return opcode_map_node
 
+def _import_opcode_map_pcode():
+    from rosetta_opcode_map.pcode_node import opcode_map_pcode_node
+    return opcode_map_pcode_node
+
 def _import_registers():
     from rosetta_registers.node import registers_node
     return registers_node
@@ -74,8 +78,9 @@ STAGE_REGISTRY: dict[str, tuple[Callable, list[str]]] = {
     "classify":     (_import_classify,     ["meta", "db_path"]),
     "registers":    (_import_registers,    ["db_path"]),
     "mnemonics":    (_import_mnemonics,    ["db_path"]),
-    "opcode_map":   (_import_opcode_map,   ["meta", "db_path"]),
-    "instructions": (_import_instructions, ["mnemonics", "db_path"]),
+    "opcode_map":       (_import_opcode_map,       ["meta", "db_path"]),
+    "opcode_map_pcode": (_import_opcode_map_pcode, ["opcode_map", "meta"]),
+    "instructions":     (_import_instructions,     ["mnemonics", "db_path"]),
     "pcode":        (_import_pcode,        ["instructions"]),
     "generate":     (_import_generate,     ["meta", "processor_name", "out_dir"]),
     "validate":     (_import_validate,     ["lang_dir", "ghidra_home"]),
@@ -192,6 +197,14 @@ def summarize_and_warn(stage: str, state: dict[str, Any]) -> None:
                 log.info("opcode_map: skipped (encoding_style=%r)", meta.get("encoding_style"))
         else:
             log.info("opcode_map: %d entries, %d unique mnemonics", len(om), len(mn))
+
+    elif stage == "opcode_map_pcode":
+        om = state.get("opcode_map") or []
+        with_pcode = sum(1 for e in om if e.get("pcode_body"))
+        if with_pcode == 0:
+            log.warning("opcode_map_pcode: no entries received pcode_body")
+        else:
+            log.info("opcode_map_pcode: %d / %d entries have pcode_body", with_pcode, len(om))
 
     elif stage == "registers":
         regs = state.get("registers") or []

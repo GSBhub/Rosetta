@@ -16,6 +16,7 @@ def build_graph() -> StateGraph:
     from rosetta_meta.node import meta_node
     from rosetta_mnemonics.node import mnemonics_node
     from rosetta_opcode_map.node import opcode_map_node
+    from rosetta_opcode_map.pcode_node import opcode_map_pcode_node
     from rosetta_pcode.node import pcode_node
     from rosetta_registers.node import registers_node
     from rosetta_validate_sla.node import validate_sla_node
@@ -27,8 +28,9 @@ def build_graph() -> StateGraph:
     g.add_node("classify",     classify_node)
     g.add_node("registers",    registers_node)
     g.add_node("mnemonics",    mnemonics_node)
-    g.add_node("opcode_map",   opcode_map_node)
-    g.add_node("instructions", instructions_node)
+    g.add_node("opcode_map",       opcode_map_node)
+    g.add_node("opcode_map_pcode", opcode_map_pcode_node)
+    g.add_node("instructions",     instructions_node)
     g.add_node("pcode",        pcode_node)
     g.add_node("generate_sla", generate_sla_node)
     g.add_node("validate_sla", validate_sla_node)
@@ -47,12 +49,14 @@ def build_graph() -> StateGraph:
     g.add_edge("classify", "mnemonics")
     g.add_edge("classify", "opcode_map")
 
-    # fan-in at instructions: waits for registers, mnemonics, opcode_map
-    # For opcode_table ISAs: instructions is a light pass (opcode_map already has the data)
-    # For fixed_word ISAs:   opcode_map is a no-op; instructions does real extraction
-    g.add_edge("registers",  "instructions")
-    g.add_edge("mnemonics",  "instructions")
-    g.add_edge("opcode_map", "instructions")
+    # opcode_map_pcode enriches CISC entries with pcode_body before the fan-in.
+    # For fixed_word ISAs this node is a no-op (passes opcode_map through unchanged).
+    g.add_edge("opcode_map",       "opcode_map_pcode")
+
+    # fan-in at instructions: waits for registers, mnemonics, opcode_map_pcode
+    g.add_edge("registers",        "instructions")
+    g.add_edge("mnemonics",        "instructions")
+    g.add_edge("opcode_map_pcode", "instructions")
 
     g.add_edge("instructions", "pcode")
     g.add_edge("pcode",        "generate_sla")

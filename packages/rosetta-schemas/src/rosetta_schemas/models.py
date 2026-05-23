@@ -62,6 +62,11 @@ class OpcodeDef(BaseModel):
                     "E.g. 0 for implied, 1 for dp/rel, 2 for abs, 3 for long."
     )
     description: str = Field(default="", description="Brief description of the operation")
+    pcode_body: str = Field(
+        default="",
+        description="SLEIGH pcode body for this constructor, e.g. 'A = *[ram]:2 w1;'. "
+                    "Empty means the generator will use a mode-based stub.",
+    )
 
 
 class RegisterDef(BaseModel):
