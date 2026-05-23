@@ -416,6 +416,67 @@ def _normalize_mnemonic(mnemonic: str) -> str:
     return word.upper()
 
 
+# Tokens available in the is-clause for each addressing mode.
+# LLM-generated pcode that references tokens outside this set is invalid and
+# will cause SLEIGH "not declared in pattern list" errors.
+_MODE_TOKENS: dict[str, frozenset[str]] = {
+    # implied / accumulator — no operand tokens
+    "":            frozenset(),
+    "imp":         frozenset(), "implied":      frozenset(),
+    "acc":         frozenset(), "accumulator":  frozenset(),
+    # byte operand → b1
+    **{m: frozenset({"b1"}) for m in (
+        "imm", "#imm", "imm8", "#imm8",
+        "dp", "zp", "direct", "direct page",
+        "dp,X", "zp,X", "direct,X",
+        "dp,Y", "zp,Y", "direct,Y",
+        "(dp)", "(zp)", "indirect",
+        "(dp,X)", "(zp,X)", "dp indexed indirect", "indexed indirect",
+        "(dp),Y", "(zp),Y", "indirect indexed",
+        "sr", "stk", "stack relative", "stack,S",
+        "(sr),Y", "(stk),Y", "stack relative indirect indexed",
+        "sig", "signature", "mvn", "mvp", "block move",
+    )},
+    # word (16-bit) operand → w1
+    **{m: frozenset({"w1"}) for m in (
+        "imm16", "#imm16",
+        "abs", "absolute", "abs16",
+        "abs,X", "absolute,X", "absolute+X",
+        "abs,Y", "absolute,Y", "absolute+Y",
+        "(abs)", "(absolute)", "absolute indirect",
+        "(abs,X)", "(absolute,X)", "absolute indirect indexed",
+        "(abs),Y", "(absolute),Y", "absolute indirect indexed Y",
+    )},
+    # long (24-bit) operand → l1
+    **{m: frozenset({"l1"}) for m in (
+        "long", "abs24", "absolute long", "long absolute",
+        "long,X", "abs24,X", "absolute long,X",
+        "long,Y", "abs24,Y", "absolute long,Y",
+        "(long,X)", "(abs24,X)",
+        "(long),Y", "(abs24),Y", "absolute long indirect indexed Y",
+    )},
+    # relative branches — subtable names, NOT b1/w1
+    **{m: frozenset({"Rel8"}) for m in (
+        "rel", "rel8", "relative", "pcr8",
+    )},
+    **{m: frozenset({"Rel16"}) for m in (
+        "rel16", "pcr16", "long relative",
+    )},
+}
+
+_ALL_TOKENS = frozenset({"b1", "w1", "l1", "sb1", "sw1", "Rel8", "Rel16"})
+
+
+def _validate_pcode_tokens(body: str, mode: str) -> bool:
+    """Return True if body only references token fields declared for this mode."""
+    import re
+    allowed = _MODE_TOKENS.get(mode, frozenset({"b1"}))
+    for tok in _ALL_TOKENS - allowed:
+        if re.search(r"\b" + re.escape(tok) + r"\b", body):
+            return False
+    return True
+
+
 def lookup_pattern(mnemonic: str, mode: str, word_size_bits: int) -> str | None:
     """Return a pcode body string for (mnemonic, mode), or None if not in table."""
     ws = word_size_bits // 8
@@ -437,17 +498,29 @@ _FALLBACK_SYSTEM = """\
 You are an expert in Ghidra SLEIGH P-code for CISC processors.
 Given an instruction mnemonic and addressing mode, output a single-line SLEIGH pcode body.
 
-Token fields: b1 (8-bit byte operand), w1 (16-bit word/address), l1 (24-bit long).
-Subtables: Rel8 (8-bit relative branch addr), Rel16 (16-bit relative branch addr).
+Token fields available per addressing mode (ONLY use the token for the current mode):
+  b1  (8-bit)  — dp, zp, dp,X, dp,Y, (dp), (dp,X), (dp),Y, imm, sr, (sr),Y
+  w1  (16-bit) — abs, abs,X, abs,Y, (abs), (abs,X), (abs),Y, imm16
+  l1  (24-bit) — long, long,X, long,Y, (long,X), (long),Y
+  Rel8         — rel, rel8, relative  (do NOT use b1 for branch modes)
+  Rel16        — rel16, pcr16
+  (none)       — imp, acc
 
-Rules for SLEIGH size safety:
-- Never use zext() directly as a memory address. Always assign: local addr:N = zext(x);
-- Use explicit local variables for all address computations.
-- Pcode examples:
-    LDA abs     → A = *[ram]:2 w1;
-    STA dp,X    → local ea:2 = DPR + zext(b1) + X; *[ram]:2 ea = A;
-    JMP abs     → goto w1;
+SLEIGH size-safety rules (violating these causes compile errors):
+1. NEVER call zext() on a token field (b1, w1, l1). Token fields extend implicitly.
+   WRONG: local ea:2 = zext(b1);    RIGHT: local ea:2 = b1;
+2. NEVER use a token field directly as a memory address.
+   WRONG: A = *[ram]:2 w1;          RIGHT: local w1_a:2 = w1; A = *[ram]:2 w1_a;
+3. NEVER do three-operand arithmetic in one step.
+   WRONG: local ea:2 = DPR + b1 + X;
+   RIGHT: local b1_z:2 = b1; local base:2 = DPR + b1_z; local ea:2 = base + X;
+
+Correct pcode examples:
+    LDA abs     → local w1_a:2 = w1; A = *[ram]:2 w1_a;
+    STA dp,X    → local b1_z:2 = b1; local base:2 = DPR + b1_z; local ea:2 = base + X; *[ram]:2 ea = A;
+    JMP (abs)   → local w1_a:2 = w1; local ptr:2 = *[ram]:2 w1_a; goto [ptr];
     BEQ rel     → if (Z == 1) goto Rel8;
+    BRA rel     → goto Rel8;
     PHA         → SP = SP - 2; local sp_a:2 = zext(SP); *[ram]:2 sp_a = A;
     RTS         → return [0];
     Unknown     → local tmp:1 = 0;
@@ -538,10 +611,17 @@ def generate_pcode_bodies(
             log.info("pcode: LLM fallback for %s %s", mn, mode)
             if llm_calls > 0 and inter_entry_sleep > 0:
                 time.sleep(inter_entry_sleep)
-            results[(mn, mode)] = generate_via_llm(
+            llm_body = generate_via_llm(
                 mn, mode, desc, isa_name, register_names, word_size_bits, settings
             )
             llm_calls += 1
+            if not _validate_pcode_tokens(llm_body, mode):
+                log.warning(
+                    "pcode: LLM body for (%s, %s) references undeclared tokens — discarding: %r",
+                    mn, mode, llm_body,
+                )
+                llm_body = _STUB
+            results[(mn, mode)] = llm_body
 
     log.info(
         "pcode: %d pairs — %d pattern hits, %d LLM calls",
