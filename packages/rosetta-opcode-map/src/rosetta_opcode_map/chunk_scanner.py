@@ -49,8 +49,8 @@ _MNEMONIC_RE = re.compile(
     re.IGNORECASE,
 )
 
-_MIN_HEX = 6
-_MIN_MNEMONICS = 2
+_MIN_HEX = 8
+_MIN_MNEMONICS = 4
 
 
 def looks_like_opcode_table(text: str) -> bool:
@@ -69,7 +69,7 @@ def get_all_chunks(settings: Any) -> list[dict[str, str]]:
     """Return every chunk in the vector store as {id, text} dicts."""
     try:
         # settings.vs is a langchain_chroma.Chroma; _collection is the raw ChromaDB client
-        result = settings.vs._collection.get(include=["documents", "ids"])
+        result = settings.vs._collection.get(include=["documents"])
         chunks = [
             {"id": id_, "text": doc}
             for id_, doc in zip(result["ids"], result["documents"])
