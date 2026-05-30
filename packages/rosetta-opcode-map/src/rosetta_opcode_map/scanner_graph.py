@@ -164,7 +164,10 @@ def coverage_check_node(state: ScannerState) -> dict:
 
     gaps = [
         {"prefix": pfx, "row": row, "opcodes": sorted(ops)}
-        for (pfx, row), ops in sorted(gap_rows.items())
+        for (pfx, row), ops in sorted(
+            gap_rows.items(),
+            key=lambda kv: (kv[0][0] if kv[0][0] is not None else -1, kv[0][1]),
+        )
     ]
     log.info("scanner: %d gap rows across %d prefix(es)", len(gaps), len(prefixes))
     return {"gaps": gaps}
