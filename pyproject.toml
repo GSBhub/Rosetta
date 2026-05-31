@@ -9,8 +9,10 @@ dependencies = [
     "rosetta-utils",
     "rosetta-ingest",
     "rosetta-meta",
+    "rosetta-classify",
     "rosetta-registers",
     "rosetta-mnemonics",
+    "rosetta-opcode-map",
     "rosetta-instructions",
     "rosetta-pcode",
     "rosetta-generate-sla",
@@ -51,8 +53,10 @@ rosetta-schemas      = { workspace = true }
 rosetta-utils        = { workspace = true }
 rosetta-ingest       = { workspace = true }
 rosetta-meta         = { workspace = true }
+rosetta-classify     = { workspace = true }
 rosetta-registers    = { workspace = true }
 rosetta-mnemonics    = { workspace = true }
+rosetta-opcode-map   = { workspace = true }
 rosetta-instructions = { workspace = true }
 rosetta-pcode        = { workspace = true }
 rosetta-generate-sla = { workspace = true }
