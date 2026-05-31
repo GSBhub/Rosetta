@@ -1,0 +1,13 @@
+{% for instr in instructions %}
+# {{ instr.mnemonic }}: {{ instr.semantics | truncate(80) }}
+{% set display = instr.mnemonic %}
+{% if instr.operands %}
+{% set display = display + ' ' + (instr.operands | join(', ')) %}
+{% endif %}
+:{{ display }} is {% if instr.bit_constraints %}{% for field, val in instr.bit_constraints.items() %}{{ field }}{{ instr.encoding_bits }}=0b{{ val }}{% if not loop.last %} & {% endif %}{% endfor %}{% else %}epsilon{% endif %}
+
+{
+    {{ instr.pcode_hint | sanitize_pcode }}
+}
+
+{% endfor %}

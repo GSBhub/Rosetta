@@ -19,6 +19,10 @@ output/
 manuals/
 *.db
 *.sla
+*.jsonl
+*_test_*/
+scripts/augment_with_reference.py
+scripts/fix_armv6_spec.py
 
 # Environment / secrets
 .env

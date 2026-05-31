@@ -1,0 +1,29 @@
+[project]
+name = "rosetta-pcode"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "rosetta-schemas",
+    "rosetta-utils",
+    "langchain-core>=0.3",
+    "langchain-anthropic>=0.3",
+    "docquery @ git+https://github.com/gsbhub/docquery",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rosetta_pcode"]
+
+[tool.uv.sources]
+rosetta-schemas = { workspace = true }
+rosetta-utils = { workspace = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v"

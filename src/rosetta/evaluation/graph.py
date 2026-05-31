@@ -4,9 +4,34 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from pathlib import Path
 
 log = logging.getLogger(__name__)
+
+_CHUNK_SIZE = 1000
+
+
+def _chunk_text(text: str, chunk_size: int = _CHUNK_SIZE) -> list[str]:
+    overlap = chunk_size // 10
+    chunks, start = [], 0
+    while start < len(text):
+        chunks.append(text[start : start + chunk_size])
+        start += chunk_size - overlap
+    return chunks
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    mag_a = math.sqrt(sum(x * x for x in a))
+    mag_b = math.sqrt(sum(x * x for x in b))
+    return dot / (mag_a * mag_b) if mag_a and mag_b else 0.0
+
+
+def _mean_pairwise_similarity(vecs_a: list[list[float]], vecs_b: list[list[float]]) -> float:
+    if not vecs_a or not vecs_b:
+        return 0.0
+    return sum(max(_cosine(va, vb) for vb in vecs_b) for va in vecs_a) / len(vecs_a)
 
 # All ARM + AARCH64 variants shipped with Ghidra 12.x
 ARM_VARIANTS: list[tuple[str, str, str]] = [
@@ -66,7 +91,6 @@ def compare_all_variants(
     if include_embeddings:
         from docquery.config import Settings as DocSettings
         from docquery.embeddings.provider import get_embeddings
-        from rosetta.evaluation.similarity import _chunk_text, _mean_pairwise_similarity
         cfg = settings or DocSettings()
         embedder = get_embeddings(cfg)
         gen_vecs = embedder.embed_documents(_chunk_text(gen_text))
@@ -83,7 +107,6 @@ def compare_all_variants(
         row.update(_structural_metrics(gen_text, ref_text))
 
         if include_embeddings and gen_vecs is not None:
-            from rosetta.evaluation.similarity import _chunk_text, _mean_pairwise_similarity
             ref_vecs = embedder.embed_documents(_chunk_text(ref_text))
             row["semantic_similarity"] = _mean_pairwise_similarity(gen_vecs, ref_vecs)
 
@@ -150,53 +173,3 @@ def plot_variant_comparison(
         plt.show()
     plt.close()
 
-
-def plot_batch_results(
-    results: list[dict],
-    title: str = "Batch Evaluation: Generated vs Reference",
-    out_path: Path | None = None,
-    show: bool = True,
-) -> None:
-    """Bar chart from a batch_results.json list (one entry per manifest target)."""
-    import matplotlib.pyplot as plt
-    import numpy as np
-
-    # Filter to rows with metric data
-    rows = [r for r in results if "instruction_coverage" in r]
-    if not rows:
-        log.warning("No metric data in results to plot")
-        return
-
-    labels = [r["id"] for r in rows]
-    coverage = [r.get("instruction_coverage", 0) for r in rows]
-    reg_overlap = [r.get("register_overlap", 0) for r in rows]
-    has_sem = any("semantic_similarity" in r for r in rows)
-    sem_sim = [r.get("semantic_similarity", 0) for r in rows]
-
-    x = np.arange(len(labels))
-    width = 0.25 if has_sem else 0.35
-
-    fig, ax = plt.subplots(figsize=(max(8, len(labels) * 1.5), 6))
-    ax.bar(x - width, coverage,   width, label="Instruction coverage", color="#2196F3")
-    ax.bar(x,         reg_overlap, width, label="Register overlap",     color="#4CAF50")
-    if has_sem:
-        ax.bar(x + width, sem_sim, width, label="Semantic similarity",  color="#FF9800")
-
-    compile_status = [("✓" if r.get("compile_ok") else "✗") for r in rows]
-    ax.set_xticks(x)
-    ax.set_xticklabels([f"{l}\n{s}" for l, s in zip(labels, compile_status)], fontsize=9)
-    ax.set_xlabel("ARM Variant (✓=compiled OK  ✗=compile error)")
-    ax.set_ylabel("Score (0 – 1)")
-    ax.set_title(title)
-    ax.set_ylim(0, 1.05)
-    ax.axhline(0.5, color="grey", linestyle="--", linewidth=0.7, alpha=0.6)
-    ax.legend()
-    ax.grid(axis="y", alpha=0.3)
-    plt.tight_layout()
-
-    if out_path:
-        plt.savefig(out_path, dpi=150)
-        log.info("Graph saved to %s", out_path)
-    if show:
-        plt.show()
-    plt.close()

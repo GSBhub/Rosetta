@@ -8,6 +8,7 @@ from rosetta.evaluation.spec_loader import (
     extract_register_names,
     load_ghidra_reference,
     load_slaspec_text,
+    load_spec_text,
 )
 from tests.conftest import requires_ghidra, GHIDRA_HOME
 
@@ -133,10 +134,9 @@ def test_load_ghidra_reference_by_lang_id():
 
 
 @requires_ghidra
-def test_load_ghidra_reference_by_processor_name():
+def test_load_ghidra_reference_by_processor_name_returns_directory():
     path = load_ghidra_reference(GHIDRA_HOME, "ARM")
-    assert path.exists()
-    assert path.suffix == ".slaspec"
+    assert path.is_dir(), "bare processor name should return the languages/ directory"
 
 
 @requires_ghidra
@@ -145,3 +145,38 @@ def test_all_arm_variants_have_mnemonics(ghidra_arm_languages_dir):
         text = load_slaspec_text(slaspec)
         m = extract_mnemonics(text)
         assert len(m) > 0, f"{slaspec.name} yielded 0 mnemonics — include chain may be broken"
+
+
+def test_load_spec_text_file(tmp_path):
+    f = tmp_path / "test.slaspec"
+    f.write_text(":ADD is op=0 { }")
+    assert ":ADD" in load_spec_text(f)
+
+
+def test_load_spec_text_directory(tmp_path):
+    (tmp_path / "a.slaspec").write_text(":ADD is op=0 { }")
+    (tmp_path / "b.slaspec").write_text(":SUB is op=1 { }")
+    (tmp_path / "not_a_spec.txt").write_text(":MUL is op=2 { }")
+    text = load_spec_text(tmp_path)
+    mnemonics = extract_mnemonics(text)
+    assert "ADD" in mnemonics
+    assert "SUB" in mnemonics
+    assert "MUL" not in mnemonics  # .txt file should be ignored
+
+
+def test_load_spec_text_directory_deduplicates_includes(tmp_path):
+    sinc = tmp_path / "shared.sinc"
+    sinc.write_text(":MOV is op=5 { }")
+    (tmp_path / "a.slaspec").write_text('@include "shared.sinc"\n:ADD is op=0 { }')
+    (tmp_path / "b.slaspec").write_text('@include "shared.sinc"\n:SUB is op=1 { }')
+    text = load_spec_text(tmp_path)
+    # MOV should appear exactly once despite two includes
+    assert text.count(":MOV") == 1
+
+
+@requires_ghidra
+def test_load_spec_text_arm_directory_union(ghidra_arm_languages_dir):
+    dir_mnemonics = extract_mnemonics(load_spec_text(ghidra_arm_languages_dir))
+    # Union across all variants should be larger than any single variant
+    single_mnemonics = extract_mnemonics(load_slaspec_text(ghidra_arm_languages_dir / "ARM7_le.slaspec"))
+    assert len(dir_mnemonics) >= len(single_mnemonics)
