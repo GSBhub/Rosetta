@@ -109,7 +109,6 @@ def decode_node(state: PipelineState) -> dict[str, Any]:
         "iterations": len(seen),
         "stall_count": 0,
         "current_def": None,
-        "opcode_map_rows": [],
         "written": [],
         "errors": [],
     }
@@ -132,11 +131,10 @@ def decode_node(state: PipelineState) -> dict[str, Any]:
 
     subgraph_errors = list(final.get("errors") or [])
     written_mnemonics = list(final.get("written") or [])
-    opcode_rows = list(final.get("opcode_map_rows") or [])
 
     log.info(
-        "decode_node: wrote %d constructors, %d opcode rows, lang_dir=%s",
-        len(written_mnemonics), len(opcode_rows), writer.lang_dir,
+        "decode_node: wrote %d constructors, lang_dir=%s",
+        len(written_mnemonics), writer.lang_dir,
     )
 
     # Rebuild InstructionDef dicts for state (for downstream evaluate/validate).
@@ -152,7 +150,6 @@ def decode_node(state: PipelineState) -> dict[str, Any]:
 
     return {
         "instructions": instructions_out,
-        "opcode_map": opcode_rows,
         "lang_dir": str(writer.lang_dir) if writer.lang_dir else None,
         "errors": errors + subgraph_errors,
     }
