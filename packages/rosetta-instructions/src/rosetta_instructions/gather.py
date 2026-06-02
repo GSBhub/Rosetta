@@ -14,6 +14,99 @@ log = logging.getLogger(__name__)
 
 _FENCE_RE = re.compile(r'```(?:json)?\s*(\{.*?})\s*```', re.DOTALL)
 
+# LLMs often emit camelCase or alternative names for schema fields.
+_KEY_MAP: dict[str, str] = {
+    # encoding_bits
+    "encodingBits":     "encoding_bits",
+    "encodingWidth":    "encoding_bits",
+    "encoding_width":   "encoding_bits",
+    "instructionWidth": "encoding_bits",
+    "width":            "encoding_bits",
+    "size":             "encoding_bits",
+    # bit_fields
+    "bitFields":        "bit_fields",
+    "fields":           "bit_fields",
+    # bit_constraints
+    "bitConstraints":   "bit_constraints",
+    "requiredBits":     "bit_constraints",
+    "required_bits":    "bit_constraints",
+    "fixedBits":        "bit_constraints",
+    # semantics (many synonyms)
+    "description":      "semantics",
+    "operation":        "semantics",
+    "meaning":          "semantics",
+    "behavior":         "semantics",
+    "behaviour":        "semantics",
+    "explanation":      "semantics",
+    "summary":          "semantics",
+    "detail":           "semantics",
+    "details":          "semantics",
+    # pcode_hint
+    "pcodeHint":        "pcode_hint",
+    "pcode":            "pcode_hint",
+    "pseudocode":       "pcode_hint",
+    # assembly variants
+    "assembly":         "variants",
+    "syntax":           "variants",
+    "assemblySyntax":   "variants",
+}
+
+
+def _normalize(d: dict) -> dict:
+    """Remap LLM key variations → snake_case Pydantic fields; coerce nested values."""
+    out = {_KEY_MAP.get(k, k): v for k, v in d.items()}
+
+    # operands: list[str] — LLMs sometimes return list[{name, type, ...}]
+    if "operands" in out and out["operands"]:
+        out["operands"] = [
+            op["name"] if isinstance(op, dict) else str(op)
+            for op in out["operands"]
+        ]
+
+    # variants: must be list[str]
+    if "variants" in out:
+        v = out["variants"]
+        if isinstance(v, str):
+            out["variants"] = [v]
+        elif isinstance(v, list):
+            out["variants"] = [str(x) for x in v]
+
+    # bit_fields: dict[str, str] ("high:low") — LLMs sometimes return dict[str, {high, low}]
+    if "bit_fields" in out and isinstance(out["bit_fields"], dict):
+        bf: dict[str, str] = {}
+        for k, v in out["bit_fields"].items():
+            if isinstance(v, dict):
+                h = v.get("high", v.get("msb", v.get("start", 0)))
+                lo = v.get("low", v.get("lsb", v.get("end", 0)))
+                bf[k] = f"{h}:{lo}"
+            else:
+                bf[k] = str(v)
+        out["bit_fields"] = bf
+
+    # bit_constraints: dict[str, str] — coerce any non-string values
+    if "bit_constraints" in out and isinstance(out["bit_constraints"], dict):
+        out["bit_constraints"] = {
+            k: str(v.get("value", v.get("val", next(iter(v.values()), "")))
+               if isinstance(v, dict) else v)
+            for k, v in out["bit_constraints"].items()
+        }
+
+    # encoding_bits: must be int; sometimes arrives as string "32"
+    if "encoding_bits" in out:
+        try:
+            out["encoding_bits"] = int(out["encoding_bits"])
+        except (TypeError, ValueError):
+            out["encoding_bits"] = 32
+
+    # semantics fallback: use any remaining text-valued key if semantics is missing
+    if "semantics" not in out:
+        for fallback in ("notes", "note", "comment", "text"):
+            if fallback in out and out[fallback]:
+                out["semantics"] = str(out[fallback])
+                break
+
+    return out
+
 _SYSTEM_PROMPT = (
     "You are an expert ISA analyst. "
     "Use ONLY the retrieved manual excerpts provided as context. "
@@ -29,32 +122,46 @@ _SYSTEM_PROMPT = (
 _SCHEMA_JSON = json.dumps(InstructionDef.model_json_schema(), indent=2)
 
 
-def _extract_instruction(query: str, settings: Any) -> InstructionDef | None:
-    """Extraction pipeline with markdown fence stripping.
+def _extract_instruction(
+    mnemonic: str,
+    next_mnemonic: str | None,
+    settings: Any,
+) -> InstructionDef | None:
+    """Extraction pipeline with fence stripping and key normalisation.
 
-    Mirrors docquery's ExtractionPipeline but strips ```json...``` fences
-    before JSON validation so models that wrap responses still parse correctly.
+    Keeps the HumanMessage short ("Extract: {mnemonic}") so that models
+    which switch to documentation mode on long queries stay in JSON mode.
+    Disambiguation is a one-line note in the SystemMessage.
     """
     from langchain_core.messages import HumanMessage, SystemMessage
     from docquery.embeddings.llm import get_llm
     from docquery.tools.retrieval_tools import make_similarity_tool
 
+    rag_query = (
+        f"From the manual context only, extract the encoding for the {mnemonic!r} instruction."
+        f" Provide: encoding width in bits, bit fields (name → high:low), operands, semantics."
+    )
+
     similarity_tool = make_similarity_tool(settings.vs, settings)
     llm = get_llm(settings)
-    context = similarity_tool.invoke(query)
+    context = similarity_tool.invoke(rag_query)
+
+    sys_content = (
+        f"{_SYSTEM_PROMPT}\n\n"
+        f"Output ONLY valid JSON matching this exact schema:\n{_SCHEMA_JSON}\n"
+        "Do not include markdown code fences. Do not write any explanation."
+    )
+    if next_mnemonic:
+        sys_content += f" Extract only '{mnemonic}', not '{next_mnemonic}'."
 
     validation_errors: list[str] = []
     for attempt in range(3):
         msgs = [
-            SystemMessage(content=(
-                f"{_SYSTEM_PROMPT}\n\n"
-                f"Output ONLY valid JSON matching this schema:\n{_SCHEMA_JSON}\n"
-                "Do not include markdown code fences or explanation."
-            )),
+            SystemMessage(content=sys_content),
             HumanMessage(content=(
-                f"Context:\n{context}\n\nQuery: {query}"
+                f"Context:\n{context}\n\nExtract: {mnemonic}"
                 + (
-                    f"\n\nPrevious attempt validation errors:\n" + "\n".join(validation_errors)
+                    f"\n\nPrevious validation errors:\n" + "\n".join(validation_errors)
                     if validation_errors else ""
                 )
             )),
@@ -68,7 +175,11 @@ def _extract_instruction(query: str, settings: Any) -> InstructionDef | None:
             raw = m.group(1).strip()
 
         try:
-            return InstructionDef.model_validate_json(raw)
+            # Try direct JSON parse first; fall back to key-normalised dict parse.
+            try:
+                return InstructionDef.model_validate_json(raw)
+            except Exception:
+                return InstructionDef.model_validate(_normalize(json.loads(raw)))
         except Exception as exc:
             validation_errors = [str(exc)]
             log.debug("_extract_instruction attempt %d/%d failed: %s", attempt + 1, 3, exc)
@@ -91,22 +202,8 @@ def gather_instruction(
     *next_mnemonic* is passed as context so the LLM does not bleed fields
     from the following instruction into the current one.
     """
-    next_clause = (
-        f" The following instruction in the manual is {next_mnemonic!r} — "
-        f"do not include its fields in the output."
-        if next_mnemonic
-        else ""
-    )
-    query = (
-        f"From the manual context only, extract the encoding for the {current!r} instruction."
-        f"{next_clause}"
-        f" Provide: all assembly syntax variants, the encoding width in bits, "
-        f"all bit field names with their high:low bit positions, any required bit values, "
-        f"operand names, and a full description of the operation semantics."
-    )
-
     try:
-        result = _extract_instruction(query, settings)
+        result = _extract_instruction(current, next_mnemonic, settings)
         if result is not None:
             if not result.mnemonic or result.mnemonic.upper() == "UNKNOWN":
                 result.mnemonic = current
