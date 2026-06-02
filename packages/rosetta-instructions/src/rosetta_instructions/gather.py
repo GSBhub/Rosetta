@@ -18,7 +18,8 @@ _SYSTEM_PROMPT = (
     "opcodes, or semantics. "
     "For bit_fields provide 'high:low' notation. "
     "For bit_constraints provide the required binary value. "
-    "Return only JSON matching the schema."
+    "Return ONLY raw JSON matching the schema. "
+    "Do NOT wrap the JSON in markdown code fences or backticks of any kind."
 )
 
 

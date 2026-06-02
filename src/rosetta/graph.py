@@ -30,16 +30,14 @@ def build_graph() -> StateGraph:
     g.add_node("validate_sla", validate_sla_node)
     g.add_node("evaluate_sla", evaluate_sla_node)
 
-    # ingest → meta (serial: classify needs meta.encoding_style)
-    # ingest → registers (parallel: doesn't depend on encoding_style)
-    g.add_edge(START,    "ingest")
-    g.add_edge("ingest", "meta")
-    g.add_edge("ingest", "registers")
-
-    # meta → classify → registers fan-in at decode
+    # Serial chain: each stage feeds the next.  A parallel fork into decode caused
+    # LangGraph to invoke decode_node twice (once per incoming edge), so we keep
+    # a single predecessor for decode.
+    g.add_edge(START,       "ingest")
+    g.add_edge("ingest",    "meta")
     g.add_edge("meta",      "classify")
-    g.add_edge("classify",  "decode")
-    g.add_edge("registers", "decode")   # fan-in: waits for both classify and registers
+    g.add_edge("classify",  "registers")
+    g.add_edge("registers", "decode")
 
     # decode handles both RISC and CISC internally; downstream stages are unchanged.
     g.add_edge("decode",       "generate_sla")

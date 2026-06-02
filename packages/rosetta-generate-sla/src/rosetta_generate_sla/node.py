@@ -32,7 +32,7 @@ def generate_sla_node(state: PipelineState) -> dict[str, Any]:
     existing_lang_dir = state.get("lang_dir")
     if existing_lang_dir and Path(existing_lang_dir).exists():
         log.info("generate_sla_node: lang_dir already set by decode node — skipping")
-        return {"lang_dir": existing_lang_dir, "errors": []}
+        return {}  # no-op: do not re-write lang_dir (avoid same-step conflict)
 
     spec = get_isa_spec(state)
     if spec is None:

@@ -28,7 +28,8 @@ _GATHER_SYSTEM = (
     "Use ONLY the retrieved manual excerpts provided as context. "
     "If a field is not present in the context, leave it empty/zero. "
     "Do NOT use prior knowledge of any instruction set. "
-    "Return only JSON matching the schema."
+    "Return ONLY raw JSON matching the schema. "
+    "Do NOT wrap the JSON in markdown code fences or backticks of any kind."
 )
 
 _SEEN_SAMPLE = 8
