@@ -20,6 +20,14 @@ _DISCOVERY_SYSTEM = (
     "You are an expert ISA analyst reading a processor reference manual. "
     "Use ONLY the retrieved manual excerpts provided as context. "
     "Do NOT use prior knowledge of any instruction set; do NOT invent registers. "
+    "Only consider PROGRAMMER-VISIBLE, GENERAL-PURPOSE registers: "
+    "integer registers (e.g. R0–R15, X0–X30), the program counter (PC), "
+    "stack pointer (SP), link register (LR), flags/status register (CPSR/APSR/PSTATE), "
+    "and floating-point/SIMD registers. "
+    "EXCLUDE all of the following: system registers, debug registers, "
+    "implementation-defined registers, coprocessor registers, "
+    "and any register whose name starts with ED, ID, CTR, SCTLR, TTBR, "
+    "VBAR, MPIDR, MIDR, PIDR, CIDR, or similar system/debug prefixes. "
     "Return only JSON matching the schema."
 )
 
@@ -57,21 +65,27 @@ def discover_next_register(
         if seen_sample else ""
     )
 
+    _prog_note = (
+        " Only consider general-purpose integer registers (e.g. R0-R15, X0-X30), "
+        "PC, SP, LR, and status/flags registers (CPSR, APSR, PSTATE). "
+        "Skip system, debug, coprocessor, and implementation-defined registers."
+    )
+
     if last:
         query = (
-            f"From the manual context only, identify the programmer-visible register "
+            f"From the manual context only, identify the general-purpose or status register "
             f"documented immediately after {last!r} (return its name as 'current') and "
-            f"the register documented after that (return its name as 'next')."
-            f"{seen_clause}"
-            f" If no further registers remain, return null for both."
+            f"the next such register (return its name as 'next')."
+            f"{_prog_note}{seen_clause}"
+            f" If no further programmer-visible registers remain, return null for both."
         )
     else:
         query = (
-            "From the manual context only, identify the first programmer-visible register "
-            "documented in this manual (return its name as 'current') and the register "
-            "documented after that (return its name as 'next')."
-            f"{seen_clause}"
-            " If the manual has no registers, return null for both."
+            "From the manual context only, identify the FIRST general-purpose integer "
+            "or status register documented in this ISA manual — such as R0, X0, or CPSR "
+            "(return its name as 'current') and the next such register (return its name as 'next')."
+            f"{_prog_note}{seen_clause}"
+            " If the manual has no programmer-visible registers, return null for both."
         )
 
     try:
