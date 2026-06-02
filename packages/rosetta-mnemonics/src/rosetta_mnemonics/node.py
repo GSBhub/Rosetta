@@ -10,11 +10,14 @@ import fnmatch
 import logging
 from typing import Any
 
+from langsmith import traceable
 from rosetta_schemas.state import PipelineState
+from rosetta_utils.tracing import state_summary
 
 log = logging.getLogger(__name__)
 
 
+@traceable(run_type="chain", name="stage:mnemonics", process_inputs=state_summary)
 def mnemonics_node(state: PipelineState) -> dict[str, Any]:
     """Discover all instruction mnemonics via the inner LangGraph multi-strategy loop."""
     from docquery.config import Settings

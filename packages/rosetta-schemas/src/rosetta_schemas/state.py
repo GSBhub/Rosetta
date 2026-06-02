@@ -21,6 +21,8 @@ class PipelineState(TypedDict, total=False):
     max_concurrent: int
     max_instructions: int | None
     max_pcode: int | None
+    max_iterations: int | None   # cursor guard for decode loop (defaults to auto from count query)
+    output_format: str           # "sla" (default); selects the InstructionWriter implementation
     filter_mnemonics: str | None   # comma-separated glob patterns e.g. "MOV*,ADD"
     memory_warn_gb: float
     chunk_size: int | None

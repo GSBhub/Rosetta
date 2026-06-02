@@ -367,9 +367,12 @@ def evaluate(module_dir: str, reference: str) -> None:
 @click.option("--source", default=None, type=click.Path(), help="PDF or source dir (ingest stage only)")
 @click.option("--reference", default=None, help="Reference .slaspec path (evaluate stage)")
 @click.option("--inter-chunk-sleep", default=2.0, show_default=True, help="Sleep between instruction chunks (Ollama KV GC)")
-@click.option("--max-instructions", default=None, type=int, help="Cap instruction count (instructions stage)")
+@click.option("--max-instructions", default=None, type=int, help="Cap instruction count (decode stage)")
+@click.option("--max-iterations", default=None, type=int, help="Hard cap on cursor iterations in decode loop")
 @click.option("--max-pcode", default=None, type=int, help="Cap pcode generation (pcode stage)")
 @click.option("--memory-warn-gb", default=2.0, show_default=True, help="Free RAM warning threshold in GB")
+@click.option("--output-format", default="sla", show_default=True,
+              help="Output format for the decode stage (default: sla)")
 @click.option("--llm-model", default=None, help="Override LLM_MODEL env var")
 @click.option("--llm-base-url", default=None, help="Override LLM_BASE_URL env var")
 @click.option("--embed-model", default=None, help="Override EMBED_MODEL env var")
@@ -384,8 +387,10 @@ def run_stage_cmd(
     reference: str | None,
     inter_chunk_sleep: float,
     max_instructions: int | None,
+    max_iterations: int | None,
     max_pcode: int | None,
     memory_warn_gb: float,
+    output_format: str,
     llm_model: str | None,
     llm_base_url: str | None,
     embed_model: str | None,
@@ -393,8 +398,8 @@ def run_stage_cmd(
 ) -> None:
     """Run a single pipeline stage (or 'all') with checkpoint-based I/O.
 
-    STAGE is one of: ingest meta registers mnemonics instructions pcode
-    generate validate evaluate  — or 'all' to run the full sequence.
+    STAGE is one of: ingest meta classify registers decode generate validate evaluate
+    — or 'all' to run the full sequence.
 
     A checkpoint JSON file accumulates state across stages so each run
     reads the previous stage's output and adds its own.  Per-stage
@@ -437,6 +442,8 @@ def run_stage_cmd(
             max_instructions=max_instructions,
             max_pcode=max_pcode,
             memory_warn_gb=memory_warn_gb,
+            output_format=output_format,
+            max_iterations=max_iterations,
         )
     else:
         # Refresh mutable inputs that may differ per invocation
@@ -455,8 +462,11 @@ def run_stage_cmd(
         state["inter_chunk_sleep"] = inter_chunk_sleep
         if max_instructions is not None:
             state["max_instructions"] = max_instructions
+        if max_iterations is not None:
+            state["max_iterations"] = max_iterations
         if max_pcode is not None:
             state["max_pcode"] = max_pcode
+        state["output_format"] = output_format
 
     stages_to_run = STAGE_ORDER if stage == "all" else [stage]
 

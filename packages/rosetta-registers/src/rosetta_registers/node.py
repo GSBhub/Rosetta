@@ -9,10 +9,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from langsmith import traceable
 from pydantic import BaseModel
 
 from rosetta_schemas.models import RegisterDef
 from rosetta_schemas.state import PipelineState
+from rosetta_utils.tracing import state_summary
 
 log = logging.getLogger(__name__)
 
@@ -32,6 +34,7 @@ _QUERY = (
 )
 
 
+@traceable(run_type="chain", name="stage:registers", process_inputs=state_summary)
 def registers_node(state: PipelineState) -> dict[str, Any]:
     """Extract list[RegisterDef] via RAG ExtractionPipeline."""
     import docquery

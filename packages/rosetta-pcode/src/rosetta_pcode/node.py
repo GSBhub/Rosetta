@@ -9,12 +9,15 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from langsmith import traceable
 from rosetta_schemas.models import InstructionDef
 from rosetta_schemas.state import PipelineState, get_instructions
+from rosetta_utils.tracing import state_summary
 
 log = logging.getLogger(__name__)
 
 
+@traceable(run_type="chain", name="stage:pcode", process_inputs=state_summary)
 def pcode_node(state: PipelineState) -> dict[str, Any]:
     """Generate SLEIGH P-code hints for each instruction via direct LLM call."""
     from docquery.config import Settings

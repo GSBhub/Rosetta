@@ -16,11 +16,14 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from langsmith import traceable
 from rosetta_schemas.state import PipelineState, get_meta
+from rosetta_utils.tracing import state_summary
 
 log = logging.getLogger(__name__)
 
 
+@traceable(run_type="chain", name="stage:opcode_map", process_inputs=state_summary)
 def opcode_map_node(state: PipelineState) -> dict[str, Any]:
     """Extract the opcode table for opcode_table ISAs; no-op otherwise."""
     meta = get_meta(state)

@@ -10,11 +10,14 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from langsmith import traceable
 from rosetta_schemas.state import PipelineState
+from rosetta_utils.tracing import state_summary
 
 log = logging.getLogger(__name__)
 
 
+@traceable(run_type="chain", name="stage:evaluate_sla", process_inputs=state_summary)
 def evaluate_sla_node(state: PipelineState) -> dict[str, Any]:
     """Compute structural similarity against a reference spec.
 

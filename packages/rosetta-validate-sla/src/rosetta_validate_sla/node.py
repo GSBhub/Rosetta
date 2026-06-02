@@ -10,11 +10,14 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from langsmith import traceable
 from rosetta_schemas.state import PipelineState
+from rosetta_utils.tracing import state_summary
 
 log = logging.getLogger(__name__)
 
 
+@traceable(run_type="chain", name="stage:validate_sla", process_inputs=state_summary)
 def validate_sla_node(state: PipelineState) -> dict[str, Any]:
     """Run the Ghidra SLEIGH compiler against the generated .slaspec."""
     from rosetta_validate_sla.sla.sleigh_compiler import compile_slaspec

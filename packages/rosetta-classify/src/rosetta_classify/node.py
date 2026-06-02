@@ -9,10 +9,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from langsmith import traceable
 from pydantic import BaseModel, Field
 
 from rosetta_schemas.models import EncodingStyle
 from rosetta_schemas.state import PipelineState, get_meta
+from rosetta_utils.tracing import state_summary
 
 log = logging.getLogger(__name__)
 
@@ -46,6 +48,7 @@ class _ClassifyResult(BaseModel):
     )
 
 
+@traceable(run_type="chain", name="stage:classify", process_inputs=state_summary)
 def classify_node(state: PipelineState) -> dict[str, Any]:
     """Classify the ISA encoding style and store it in meta.encoding_style."""
     import docquery

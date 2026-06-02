@@ -50,6 +50,10 @@ def _import_mnemonics():
     from rosetta_mnemonics.node import mnemonics_node
     return mnemonics_node
 
+def _import_decode():
+    from rosetta_instructions.node import decode_node
+    return decode_node
+
 def _import_instructions():
     from rosetta_instructions.node import instructions_node
     return instructions_node
@@ -73,21 +77,28 @@ def _import_evaluate():
 
 # (node_import, required_keys_for_prereq_check)
 STAGE_REGISTRY: dict[str, tuple[Callable, list[str]]] = {
+    # ── Happy-path stages (run-stage all) ─────────────────────────────────────
     "ingest":       (_import_ingest,       ["source_path", "db_path"]),
     "meta":         (_import_meta,         ["db_path"]),
     "classify":     (_import_classify,     ["meta", "db_path"]),
     "registers":    (_import_registers,    ["db_path"]),
-    "mnemonics":    (_import_mnemonics,    ["db_path"]),
-    "opcode_map":       (_import_opcode_map,       ["meta", "db_path"]),
-    "opcode_map_pcode": (_import_opcode_map_pcode, ["opcode_map", "meta"]),
-    "instructions":     (_import_instructions,     ["mnemonics", "db_path"]),
-    "pcode":        (_import_pcode,        ["instructions"]),
+    "decode":       (_import_decode,       ["meta", "db_path"]),
     "generate":     (_import_generate,     ["meta", "processor_name", "out_dir"]),
     "validate":     (_import_validate,     ["lang_dir", "ghidra_home"]),
     "evaluate":     (_import_evaluate,     ["lang_dir", "reference_slaspec"]),
+    # ── Legacy / debugging stages (kept for run-stage standalone use) ─────────
+    "mnemonics":    (_import_mnemonics,    ["db_path"]),
+    "opcode_map":       (_import_opcode_map,       ["meta", "db_path"]),
+    "opcode_map_pcode": (_import_opcode_map_pcode, ["opcode_map", "meta"]),
+    "instructions":     (_import_instructions,     ["db_path"]),
+    "pcode":        (_import_pcode,        ["instructions"]),
 }
 
-STAGE_ORDER = list(STAGE_REGISTRY.keys())
+# The canonical order for `run-stage all`
+STAGE_ORDER = [
+    "ingest", "meta", "classify", "registers",
+    "decode", "generate", "validate", "evaluate",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -143,8 +154,8 @@ def _find_producer(key: str) -> str | None:
         "registers": "registers",
         "mnemonics": "mnemonics",
         "opcode_map": "opcode_map",
-        "instructions": "instructions",
-        "lang_dir": "generate",
+        "instructions": "decode",
+        "lang_dir": "decode",
         "ghidra_home": "initial state (pass --checkpoint with ghidra_home set)",
         "reference_slaspec": "initial state (pass --reference)",
         "source_path": "initial state (pass --source)",
@@ -213,6 +224,14 @@ def summarize_and_warn(stage: str, state: dict[str, Any]) -> None:
         else:
             log.info("registers: %d registers (first: %s)", len(regs), regs[0].get("name"))
 
+    elif stage == "decode":
+        instrs = state.get("instructions") or []
+        lang_dir = state.get("lang_dir")
+        if not lang_dir:
+            log.warning("decode: lang_dir not set — writer may have failed")
+        else:
+            log.info("decode: %d instructions written, lang_dir=%s", len(instrs), lang_dir)
+
     elif stage == "mnemonics":
         mn = state.get("mnemonics") or []
         if not mn:
@@ -222,14 +241,10 @@ def summarize_and_warn(stage: str, state: dict[str, Any]) -> None:
 
     elif stage == "instructions":
         instrs = state.get("instructions") or []
-        mn = state.get("mnemonics") or []
         if not instrs:
             log.warning("instructions: empty — no instructions extracted")
         else:
-            log.info("instructions: %d extracted (of %d mnemonics)", len(instrs), len(mn))
-            no_semantics = sum(1 for i in instrs if not i.get("semantics"))
-            if no_semantics:
-                log.warning("instructions: %d entries have empty semantics", no_semantics)
+            log.info("instructions: %d extracted", len(instrs))
 
     elif stage == "pcode":
         instrs = state.get("instructions") or []
@@ -297,6 +312,8 @@ def build_initial_state(
     max_instructions: int | None,
     max_pcode: int | None,
     memory_warn_gb: float,
+    output_format: str = "sla",
+    max_iterations: int | None = None,
 ) -> dict[str, Any]:
     debug_save_dir = str(Path(db_path).parent)
     state: dict[str, Any] = {
@@ -306,6 +323,8 @@ def build_initial_state(
         "out_dir": out_dir,
         "ghidra_home": ghidra_home,
         "debug_save_dir": debug_save_dir,
+        "output_format": output_format,
+        "max_iterations": max_iterations,
         # Singleton concurrency
         "max_concurrent": 1,
         "chunk_size": 1,

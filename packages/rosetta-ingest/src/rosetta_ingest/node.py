@@ -10,11 +10,14 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from langsmith import traceable
 from rosetta_schemas.state import PipelineState
+from rosetta_utils.tracing import state_summary
 
 log = logging.getLogger(__name__)
 
 
+@traceable(run_type="chain", name="stage:ingest", process_inputs=state_summary)
 def ingest_node(state: PipelineState) -> dict[str, Any]:
     """Ingest source_path into the ChromaDB at db_path.
 

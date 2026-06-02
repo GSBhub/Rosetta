@@ -9,8 +9,10 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from langsmith import traceable
 from rosetta_schemas.models import ISAMeta
 from rosetta_schemas.state import PipelineState
+from rosetta_utils.tracing import state_summary
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +33,7 @@ _QUERY = (
 )
 
 
+@traceable(run_type="chain", name="stage:meta", process_inputs=state_summary)
 def meta_node(state: PipelineState) -> dict[str, Any]:
     """Extract ISAMeta via RAG ExtractionPipeline."""
     import docquery

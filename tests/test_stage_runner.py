@@ -82,15 +82,18 @@ def test_check_prereqs_meta_passes_with_db_path():
 
 
 def test_check_prereqs_instructions_raises_if_no_mnemonics():
-    state = _minimal_state()  # missing mnemonics
-    with pytest.raises(ValueError, match="mnemonics"):
-        check_prereqs("instructions", state)
+    # 'instructions' is now a legacy stage; its prereq is db_path (not mnemonics).
+    # The decode stage is the new happy-path stage with prereq meta + db_path.
+    state = _minimal_state()  # has db_path, no meta
+    with pytest.raises(ValueError, match="meta"):
+        check_prereqs("decode", state)
 
 
 def test_check_prereqs_instructions_raises_if_empty_mnemonics():
-    state = _minimal_state(mnemonics=[])
-    with pytest.raises(ValueError, match="mnemonics"):
-        check_prereqs("instructions", state)
+    # Legacy 'instructions' stage still registered for standalone use.
+    # Prereq is now db_path only (decode handles discovery internally).
+    state = _minimal_state()
+    check_prereqs("instructions", state)  # should not raise (db_path present)
 
 
 def test_check_prereqs_instructions_passes_with_mnemonics():
@@ -167,9 +170,10 @@ def test_run_stage_unknown_stage_raises():
 
 
 def test_run_stage_missing_prereq_raises():
-    state = _minimal_state()  # no mnemonics
-    with pytest.raises(ValueError, match="mnemonics"):
-        run_stage(state, "instructions")
+    # decode stage requires meta; a minimal state with only db_path should fail.
+    state = _minimal_state()  # no meta
+    with pytest.raises(ValueError, match="meta"):
+        run_stage(state, "decode")
 
 
 def test_run_stage_preserves_prior_errors():
@@ -261,9 +265,12 @@ def test_build_initial_state_omits_source_when_none():
 # ---------------------------------------------------------------------------
 
 def test_stage_order_covers_all_pipeline_nodes():
-    expected = ["ingest", "meta", "classify", "registers", "mnemonics",
-                "opcode_map", "opcode_map_pcode", "instructions", "pcode",
-                "generate", "validate", "evaluate"]
+    # The new happy-path order: mnemonics/opcode_map/pcode are legacy stages
+    # kept for standalone debugging but removed from STAGE_ORDER.
+    expected = [
+        "ingest", "meta", "classify", "registers",
+        "decode", "generate", "validate", "evaluate",
+    ]
     assert STAGE_ORDER == expected
 
 
