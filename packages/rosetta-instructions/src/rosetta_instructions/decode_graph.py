@@ -170,51 +170,61 @@ def _make_nodes(writer: Any) -> dict[str, Callable]:
         }
 
     def cisc_parse_node(state: DecodeState) -> dict[str, Any]:
-        """Run the opcode-map scanner and pcode enrichment, then hand to the writer."""
-        from rosetta_schemas.models import ISAMeta, RegisterDef, OpcodeDef
+        """Cursor over the opcode space (0x00–0xFF per table), one entry at a time.
+
+        Iterates the base table then each prefix table declared in
+        meta.opcode_prefixes, calling gather_opcode_def() for every byte so
+        each extraction appears as its own named LangSmith span.
+        """
+        from rosetta_instructions.opcode_cursor import gather_opcode_def
+        from rosetta_schemas.models import ISAMeta, OpcodeDef
 
         meta_raw = state.get("meta") or {}
-        registers_raw = state.get("registers") or []
         settings = state["settings"]
+        max_iter = state.get("max_iterations")
 
         try:
             meta = ISAMeta.model_validate(meta_raw)
-            registers = [RegisterDef.model_validate(r) for r in registers_raw]
         except Exception as exc:
             return {"errors": [f"cisc_parse: schema error: {exc}"]}
 
-        try:
-            from rosetta_opcode_map.node import opcode_map_node
-            from rosetta_opcode_map.pcode_node import opcode_map_pcode_node
+        # Tables to scan: base (prefix=None) + any declared prefix tables.
+        tables: list[int | None] = [None] + list(meta.opcode_prefixes or [])
+        opcode_map: list[OpcodeDef] = []
+        errors: list[str] = []
+        total = 0
 
-            parent_state = {
-                "meta": meta.model_dump(),
-                "registers": [r.model_dump() for r in registers],
-                "settings_dict": _settings_to_dict(settings),
-                "db_path": settings.db_path,
-                "inter_chunk_sleep": state.get("inter_chunk_sleep", 0.0),
-                "errors": [],
-            }
-            parent_state = _merge(parent_state, opcode_map_node(parent_state))
-            parent_state = _merge(parent_state, opcode_map_pcode_node(parent_state))
-        except Exception as exc:
-            log.exception("cisc_parse: opcode-map extraction failed")
-            return {"errors": [f"cisc_parse: {exc}"], "opcode_map_rows": []}
+        for prefix in tables:
+            label = f"0x{prefix:02X}/" if prefix is not None else "base"
+            log.info("cisc_parse: scanning %s opcode table", label)
+            for byte in range(256):
+                if max_iter is not None and total >= max_iter:
+                    log.info("cisc_parse: max_iterations=%d reached", max_iter)
+                    break
+                try:
+                    entry = gather_opcode_def(byte, prefix, settings)
+                    if entry and entry.mnemonic.upper() != "UNK":
+                        opcode_map.append(entry)
+                except Exception as exc:
+                    errors.append(f"cisc_parse 0x{byte:02X}: {exc}")
+                total += 1
+            else:
+                continue
+            break  # inner break propagates out when max_iter hit
 
-        opcode_rows = parent_state.get("opcode_map") or []
-        opcode_map = [OpcodeDef.model_validate(r) for r in opcode_rows]
+        log.info(
+            "cisc_parse: %d known entries across %d table(s)",
+            len(opcode_map), len(tables),
+        )
 
         try:
             writer.write_opcode_table(opcode_map)
         except Exception as exc:
-            return {"errors": [f"cisc_parse write_opcode_table: {exc}"], "opcode_map_rows": opcode_rows}
+            errors.append(f"cisc_parse write_opcode_table: {exc}")
 
-        written = [f"{r.get('mnemonic','?')}:{r.get('opcode','?')}" for r in opcode_rows]
-        return {
-            "opcode_map_rows": opcode_rows,
-            "written": written,
-            "errors": parent_state.get("errors") or [],
-        }
+        opcode_rows = [e.model_dump() for e in opcode_map]
+        written = [f"{e.mnemonic}:0x{e.opcode:02X}" for e in opcode_map]
+        return {"opcode_map_rows": opcode_rows, "written": written, "errors": errors}
 
     return {
         "dispatch": dispatch_node,

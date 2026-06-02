@@ -1,12 +1,13 @@
-"""Tests for rosetta_registers.node — no Ollama required."""
+"""Tests for rosetta_registers.node (cursor-driven) — no Ollama required."""
 
 from unittest.mock import MagicMock, patch
 
 from rosetta_schemas.models import RegisterDef
 
-from rosetta_registers.node import registers_node, _RegisterList
+from rosetta_registers.node import registers_node
 
 _PATCH_CHROMA = "rosetta_utils.chroma.get_chroma_wrapper"
+_PATCH_GRAPH  = "rosetta_registers.register_graph.build_register_graph"
 
 
 def _state(**kwargs):
@@ -15,28 +16,35 @@ def _state(**kwargs):
     return base
 
 
-def _fake_register_list():
-    return _RegisterList(registers=[
-        RegisterDef(name="R0", size_bits=32, description="General purpose"),
-        RegisterDef(name="PC", aliases=["R15"], size_bits=32, description="Program counter"),
-        RegisterDef(name="SP", aliases=["R13"], size_bits=32, description="Stack pointer"),
-    ])
+def _reg(name: str, size: int = 32) -> RegisterDef:
+    return RegisterDef(name=name, size_bits=size, description=f"{name} register")
+
+
+def _make_fake_graph(registers: list[RegisterDef]):
+    """Return a build_register_graph factory whose app returns the given registers."""
+    def fake_build():
+        app = MagicMock()
+        app.invoke.return_value = {
+            "registers": [r.model_dump() for r in registers],
+            "errors": [],
+        }
+        return app
+    return fake_build
 
 
 def test_registers_node_success():
-    with patch(_PATCH_CHROMA, return_value=MagicMock()), \
-         patch("docquery.query", return_value=_fake_register_list()):
+    regs = [_reg("R0"), _reg("PC"), _reg("SP")]
+    with patch(_PATCH_CHROMA), patch(_PATCH_GRAPH, side_effect=_make_fake_graph(regs)):
         result = registers_node(_state())
 
     assert result["errors"] == []
     assert len(result["registers"]) == 3
-    names = {r["name"] for r in result["registers"]}
-    assert names == {"R0", "PC", "SP"}
+    assert {r["name"] for r in result["registers"]} == {"R0", "PC", "SP"}
 
 
 def test_registers_node_serializes_to_dicts():
-    with patch(_PATCH_CHROMA, return_value=MagicMock()), \
-         patch("docquery.query", return_value=_fake_register_list()):
+    regs = [_reg("A"), _reg("X"), _reg("Y")]
+    with patch(_PATCH_CHROMA), patch(_PATCH_GRAPH, side_effect=_make_fake_graph(regs)):
         result = registers_node(_state())
 
     for reg in result["registers"]:
@@ -45,42 +53,51 @@ def test_registers_node_serializes_to_dicts():
         assert "size_bits" in reg
 
 
+def test_registers_node_empty_result():
+    with patch(_PATCH_CHROMA), patch(_PATCH_GRAPH, side_effect=_make_fake_graph([])):
+        result = registers_node(_state())
+
+    assert result["registers"] == []
+    assert result["errors"] == []
+
+
 def test_registers_node_sets_db_path():
     captured = {}
 
-    def fake_query(prompt, *, schema=None, system_prompt=None, settings=None):
-        captured["db_path"] = settings.db_path if settings else None
-        return _fake_register_list()
+    def fake_chroma(db_path, settings):
+        captured["db_path"] = db_path
+        return MagicMock()
 
-    with patch(_PATCH_CHROMA, return_value=MagicMock()), \
-         patch("docquery.query", side_effect=fake_query):
+    with patch(_PATCH_CHROMA, side_effect=fake_chroma), \
+         patch(_PATCH_GRAPH, side_effect=_make_fake_graph([])):
         registers_node(_state(db_path="/special/db"))
 
     assert captured["db_path"] == "/special/db"
 
 
-def test_registers_node_returns_empty_on_error():
-    with patch(_PATCH_CHROMA, return_value=MagicMock()), \
-         patch("docquery.query", side_effect=RuntimeError("timeout")):
+def test_registers_node_graph_exception_returns_error():
+    def boom():
+        raise RuntimeError("graph exploded")
+
+    with patch(_PATCH_CHROMA), patch(_PATCH_GRAPH, side_effect=boom):
         result = registers_node(_state())
 
     assert result["registers"] == []
     assert any("registers_node" in e for e in result["errors"])
 
 
-def test_registers_node_unexpected_type_returns_empty():
-    with patch(_PATCH_CHROMA, return_value=MagicMock()), \
-         patch("docquery.query", return_value="not a list"):
+def test_registers_node_chroma_failure_returns_error():
+    with patch(_PATCH_CHROMA, side_effect=RuntimeError("no chroma")):
         result = registers_node(_state())
 
     assert result["registers"] == []
+    assert result["errors"]
 
 
 def test_registers_node_returns_no_new_errors_on_success():
-    # Prior errors accumulate via LangGraph's operator.add reducer, not the node.
-    with patch(_PATCH_CHROMA, return_value=MagicMock()), \
-         patch("docquery.query", return_value=_fake_register_list()):
+    regs = [_reg("PC")]
+    with patch(_PATCH_CHROMA), patch(_PATCH_GRAPH, side_effect=_make_fake_graph(regs)):
         result = registers_node(_state(errors=["upstream error"]))
 
     assert result["errors"] == []
-    assert len(result["registers"]) == 3
+    assert len(result["registers"]) == 1
