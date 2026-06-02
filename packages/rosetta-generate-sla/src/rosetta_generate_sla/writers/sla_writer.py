@@ -70,9 +70,6 @@ class SlaInstructionWriter:
     def write_instruction(self, instr: InstructionDef) -> None:
         if not self._slaspec_paths:
             raise RuntimeError("write_instruction() called before open()")
-        if self._is_cisc:
-            # CISC instructions are written via write_opcode_table / close.
-            return
 
         from rosetta_generate_sla.sla.module_generator import ModuleGenerator
         from rosetta_schemas.models import ISASpec, ISAMeta
