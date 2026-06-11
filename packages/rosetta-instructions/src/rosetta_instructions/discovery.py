@@ -90,6 +90,7 @@ def scan_db_for_mnemonics(
             )
             return found
         log.info("scan_db_for_mnemonics: %d distinct tagged instruction entities", len(tagged))
+        _log_section_breakdown(settings)
         return tagged
 
     log.warning(
@@ -98,6 +99,17 @@ def scan_db_for_mnemonics(
         ENTITY_PREFIX, INSTRUCTION_ENTITY, INSTRUCTION_ENTITY,
     )
     return _frequency_scan(settings, min_freq, reference_filter)
+
+
+def _log_section_breakdown(settings: Any) -> None:
+    """Log the per-section instruction count (outline-driven), if sections exist."""
+    from rosetta_utils.entities import read_tagged_entities_by_section
+
+    groups = read_tagged_entities_by_section(settings, INSTRUCTION_ENTITY)
+    if not groups or (len(groups) == 1 and groups[0][0] is None):
+        return
+    for title, names in groups:
+        log.info("  section %r: %d instructions", title or "(unsectioned)", len(names))
 
 
 def _frequency_scan(

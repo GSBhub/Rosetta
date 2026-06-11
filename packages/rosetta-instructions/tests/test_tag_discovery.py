@@ -57,6 +57,17 @@ def test_scan_prefers_tags_over_frequency():
     assert out == ["ADD", "B", "BL"]
 
 
+def test_scan_orders_queue_by_section():
+    # outline-driven: Data Processing (section_order 0) before Memory (1),
+    # regardless of page numbers.
+    metas = [
+        {_KEY: "LDR", "page": 3, "section_order": 1, "section": "Memory"},
+        {_KEY: "ADD", "page": 8, "section_order": 0, "section": "Data Processing"},
+    ]
+    out = scan_db_for_mnemonics(_settings(metadatas=metas))
+    assert out == ["ADD", "LDR"]
+
+
 def test_scan_tag_mode_with_reference_filter():
     metas = [{_KEY: "ADD;BOGUS;SUB", "page": 1}]
     out = scan_db_for_mnemonics(

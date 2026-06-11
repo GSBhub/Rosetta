@@ -164,6 +164,72 @@ def ingest(manual: str, db: str, source: bool, entity: tuple[str, ...],
         except Exception as exc:  # reporting only — never fail the ingest
             click.echo(f"  (could not summarise entity tags: {exc})", err=True)
 
+        # Coverage gate (warn-only at ingest): how complete is discovery vs the
+        # document's own outline? Never fails ingest; use `rosetta coverage
+        # --fail-under` for a hard gate.
+        try:
+            from rosetta_utils.coverage import check_coverage
+            ok, msg = check_coverage(settings)
+            click.echo(f"  coverage: {msg}")
+            if not ok:
+                click.echo("  (re-ingest with broader --entity rules to raise coverage)", err=True)
+        except Exception as exc:
+            click.echo(f"  (coverage gate unavailable: {exc})", err=True)
+
+
+# ---------------------------------------------------------------------------
+# coverage
+# ---------------------------------------------------------------------------
+
+
+@cli.command()
+@click.option("--db", default=lambda: os.environ.get("CHROMA_DB_PATH"), required=True,
+    help="ChromaDB path (defaults to $CHROMA_DB_PATH)")
+@click.option("--entity-type", default="instruction", show_default=True,
+    help="Entity type to report coverage for")
+@click.option("--expected-count", default=None, type=int,
+    help="Expected entity count (overrides the outline-derived estimate)")
+@click.option("--threshold", default=0.9, show_default=True, type=float,
+    help="Minimum fraction of expected entities for the gate to pass")
+@click.option("--fail-under", is_flag=True, default=False,
+    help="Exit non-zero when coverage is below threshold")
+@click.option("--embed-model", default=None, help="Override EMBED_MODEL env var")
+@click.option("--embed-base-url", default=None, help="Override EMBED_BASE_URL env var")
+def coverage(db: str, entity_type: str, expected_count: int | None, threshold: float,
+             fail_under: bool, embed_model: str | None, embed_base_url: str | None) -> None:
+    """Report structural discovery coverage for a ChromaDB store.
+
+    Prints distinct tagged-entity counts per type (and per section), then a gate
+    verdict comparing the selected entity type against an expected count (from
+    --expected-count or the document outline). With --fail-under, exits non-zero
+    when coverage is below --threshold.
+    """
+    import docquery
+    from docquery.config import Settings
+    from rosetta_utils.coverage import check_coverage
+
+    _apply_model_overrides(None, None, embed_model, embed_base_url)
+    settings = Settings()
+    settings.db_path = db
+
+    cov = docquery.coverage(settings=settings)
+    if not cov:
+        click.echo(f"No tagged entities found in {db}.")
+        click.echo("Re-ingest with `--entity NAME=REGEX` to enable structural discovery.")
+        sys.exit(1 if fail_under else 0)
+
+    for etype, info in cov.items():
+        click.echo(f"{etype}: {info['count']} distinct")
+        for section, count in info.get("by_section", {}).items():
+            click.echo(f"  {section or '(unsectioned)'}: {count}")
+
+    ok, msg = check_coverage(
+        settings, entity_type=entity_type, expected=expected_count, threshold=threshold,
+    )
+    click.echo(f"gate [{entity_type}]: {msg}")
+    if fail_under and not ok:
+        sys.exit(1)
+
 
 # ---------------------------------------------------------------------------
 # generate
