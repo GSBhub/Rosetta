@@ -68,6 +68,16 @@ def decode_node(state: PipelineState) -> dict[str, Any]:
             log.info("decode_node resume: %d mnemonics already emitted", len(seen))
 
     # ------------------------------------------------------------------
+    # 3b. Pre-build mnemonic queue via Ghidra reference cross-filter
+    # ------------------------------------------------------------------
+    mnemonic_queue: list[str] = []
+    reference_str = state.get("reference_slaspec")
+    ghidra_home = state.get("ghidra_home")
+    if reference_str and ghidra_home:
+        mnemonic_queue = _build_reference_queue(settings, reference_str, ghidra_home)
+    # If no reference or build failed, discover_node will scan DB on first call.
+
+    # ------------------------------------------------------------------
     # 4. Open writer (writes header + aux files)
     # ------------------------------------------------------------------
     try:
@@ -108,6 +118,7 @@ def decode_node(state: PipelineState) -> dict[str, Any]:
         "next": None,
         "iterations": len(seen),
         "stall_count": 0,
+        "mnemonic_queue": mnemonic_queue,  # pre-built from reference or populated lazily
         "current_def": None,
         "written": [],
         "errors": [],
@@ -153,6 +164,35 @@ def decode_node(state: PipelineState) -> dict[str, Any]:
         "lang_dir": str(writer.lang_dir) if writer.lang_dir else None,
         "errors": errors + subgraph_errors,
     }
+
+
+def _build_reference_queue(settings: Any, reference_str: str, ghidra_home: str) -> list[str]:
+    """Return mnemonics from the Ghidra reference that also appear in the DB.
+
+    This cross-filter ensures every queued token is a legitimate instruction AND
+    is documented in the manual — making every iteration meaningful and eliminating
+    false positives from raw text scanning.
+    """
+    try:
+        from pathlib import Path as _Path
+        from rosetta_evaluate_sla.sla.spec_loader import (
+            extract_mnemonics,
+            load_ghidra_reference,
+            load_spec_text,
+        )
+        ref_path = load_ghidra_reference(_Path(ghidra_home), reference_str)
+        ref_mnemonics = extract_mnemonics(load_spec_text(ref_path))
+    except Exception as exc:
+        log.warning("_build_reference_queue: failed to load reference '%s': %s", reference_str, exc)
+        return []
+
+    if not ref_mnemonics:
+        return []
+
+    from rosetta_instructions.discovery import scan_db_for_mnemonics
+    queue = scan_db_for_mnemonics(settings, reference_filter=ref_mnemonics)
+    log.info("_build_reference_queue: queued %d mnemonics (reference=%s)", len(queue), reference_str)
+    return queue
 
 
 def _seen_from_slaspec(out_dir: Path, processor_name: str, bi_endian: bool) -> list[str]:

@@ -16,6 +16,10 @@ log = logging.getLogger(__name__)
 
 _STALL_LIMIT = 5
 
+# The entity-rule name used to tag register-relevant chunks at ingest time.
+# Must match the `--entity <name>=<regex>` name passed to `rosetta ingest`.
+REGISTER_ENTITY = "register"
+
 _DISCOVERY_SYSTEM = (
     "You are an expert ISA analyst reading a processor reference manual. "
     "Use ONLY the retrieved manual excerpts provided as context. "

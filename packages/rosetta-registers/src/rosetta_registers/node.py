@@ -38,9 +38,28 @@ def registers_node(state: PipelineState) -> dict[str, Any]:
 
     max_iterations: int | None = state.get("max_iterations")
 
+    # Prefer docquery's structural entity tags (deterministic, complete) when the
+    # manual was ingested with a `register` entity rule; otherwise fall back to the
+    # legacy LLM cursor inside the subgraph.
+    from rosetta_registers.cursor import REGISTER_ENTITY
+    from rosetta_utils.entities import read_tagged_entities
+
+    register_queue = read_tagged_entities(settings, REGISTER_ENTITY)
+    tag_mode = bool(register_queue)
+    if tag_mode:
+        log.info("registers_node: enumerating %d tagged registers", len(register_queue))
+    else:
+        log.warning(
+            "registers_node: no 'entity_%s' tags found — falling back to LLM cursor. "
+            "Re-ingest with `--entity %s=<regex>` for deterministic enumeration.",
+            REGISTER_ENTITY, REGISTER_ENTITY,
+        )
+
     initial: RegisterCursorState = {
         "settings": settings,
         "max_iterations": max_iterations,
+        "tag_mode": tag_mode,
+        "register_queue": register_queue or [],
         "last": None,
         "seen": [],
         "current": None,

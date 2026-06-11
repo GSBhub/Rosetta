@@ -41,11 +41,12 @@ class DecodeState(TypedDict, total=False):
 
     # Cursor state
     last: str | None             # last successfully emitted mnemonic
-    seen: list[str]              # all mnemonics processed so far (stall detection)
+    seen: list[str]              # all mnemonics processed so far
     current: str | None          # mnemonic being decoded this iteration
     next: str | None             # lookahead mnemonic (disambiguation context for fill)
     iterations: int
     stall_count: int
+    mnemonic_queue: list[str]    # remaining mnemonics to process (from DB scan)
 
     # Per-iteration scratch
     current_def: dict[str, Any] | None  # InstructionDef.model_dump()
@@ -90,15 +91,30 @@ def _route_cursor(state: DecodeState) -> str:
 def _make_nodes(writer: Any) -> dict[str, Callable]:
 
     def discover_node(state: DecodeState) -> dict[str, Any]:
-        """Ask ChromaDB for the instruction immediately after *last* and the one after that."""
-        from rosetta_instructions.discovery import discover_next
+        """Pop the next mnemonic from the queue; build the queue on first call via DB scan."""
+        from rosetta_instructions.discovery import scan_db_for_mnemonics
 
-        current, next_ = discover_next(
-            state.get("last"),
-            list(state.get("seen") or []),
-            state["settings"],
-        )
-        return {"current": current, "next": next_}
+        queue = list(state.get("mnemonic_queue") or [])
+        seen_upper = {s.upper() for s in (state.get("seen") or [])}
+
+        if not queue:
+            if state.get("last") is None:
+                # First call — scan the entire DB for mnemonic tokens.
+                queue = scan_db_for_mnemonics(state["settings"])
+            if not queue:
+                return {"current": None, "next": None, "mnemonic_queue": []}
+
+        # Skip items already processed in a previous session (resume support).
+        while queue and queue[0].upper() in seen_upper:
+            queue.pop(0)
+
+        if not queue:
+            return {"current": None, "next": None, "mnemonic_queue": []}
+
+        current = queue[0]
+        next_ = queue[1] if len(queue) > 1 else None
+        # Pop current; advance_node will add it to seen after decode.
+        return {"current": current, "next": next_, "mnemonic_queue": queue[1:]}
 
     def fill_node(state: DecodeState) -> dict[str, Any]:
         """Extract the full InstructionDef for *current* from the vector store."""

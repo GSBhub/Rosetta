@@ -31,6 +31,11 @@ class RegisterCursorState(TypedDict, total=False):
     iterations: int
     stall_count: int
 
+    # Tag-based enumeration: when tag_mode is True, registers are popped from
+    # register_queue (docquery entity tags); otherwise the legacy LLM cursor runs.
+    tag_mode: bool
+    register_queue: list[str]
+
     # Per-iteration scratch
     current_def: dict[str, Any] | None
 
@@ -69,6 +74,20 @@ def _route_cursor(state: RegisterCursorState) -> str:
 # ---------------------------------------------------------------------------
 
 def _discover_node(state: RegisterCursorState) -> dict[str, Any]:
+    # Tag mode: pop the next register from the pre-built queue (docquery tags) —
+    # the deterministic equivalent of cursor_enumerate("register").
+    if state.get("tag_mode"):
+        queue = list(state.get("register_queue") or [])
+        seen_upper = {s.upper() for s in (state.get("seen") or [])}
+        while queue and queue[0].upper() in seen_upper:
+            queue.pop(0)
+        if not queue:
+            return {"current": None, "next": None, "register_queue": []}
+        current = queue[0]
+        next_ = queue[1] if len(queue) > 1 else None
+        return {"current": current, "next": next_, "register_queue": queue[1:]}
+
+    # Fallback: legacy LLM cursor (DB has no register tags).
     from rosetta_registers.cursor import discover_next_register
     current, next_ = discover_next_register(
         state.get("last"),

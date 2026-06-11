@@ -16,6 +16,10 @@ _FENCE_RE = re.compile(r'```(?:json)?\s*(\{.*?})\s*```', re.DOTALL)
 
 # LLMs often emit camelCase or alternative names for schema fields.
 _KEY_MAP: dict[str, str] = {
+    # mnemonic
+    "instruction":      "mnemonic",
+    "name":             "mnemonic",
+    "opcode":           "mnemonic",
     # encoding_bits
     "encodingBits":     "encoding_bits",
     "encodingWidth":    "encoding_bits",
@@ -23,9 +27,12 @@ _KEY_MAP: dict[str, str] = {
     "instructionWidth": "encoding_bits",
     "width":            "encoding_bits",
     "size":             "encoding_bits",
+    "encoding":         "encoding_bits",
     # bit_fields
     "bitFields":        "bit_fields",
     "fields":           "bit_fields",
+    "format":           "bit_fields",
+    "encodingFormat":   "bit_fields",
     # bit_constraints
     "bitConstraints":   "bit_constraints",
     "requiredBits":     "bit_constraints",
@@ -49,6 +56,7 @@ _KEY_MAP: dict[str, str] = {
     "assembly":         "variants",
     "syntax":           "variants",
     "assemblySyntax":   "variants",
+    "encodings":        "variants",
 }
 
 
@@ -104,6 +112,14 @@ def _normalize(d: dict) -> dict:
             if fallback in out and out[fallback]:
                 out["semantics"] = str(out[fallback])
                 break
+
+    # Required-field defaults: if the LLM omitted them, provide safe values so
+    # model_validate succeeds rather than failing all 3 attempts and returning None.
+    if "encoding_bits" not in out:
+        out["encoding_bits"] = 32
+    if "semantics" not in out:
+        mnemonic = out.get("mnemonic", "")
+        out["semantics"] = f"ARM {mnemonic} instruction." if mnemonic else ""
 
     return out
 
@@ -177,9 +193,14 @@ def _extract_instruction(
         try:
             # Try direct JSON parse first; fall back to key-normalised dict parse.
             try:
-                return InstructionDef.model_validate_json(raw)
+                result = InstructionDef.model_validate_json(raw)
             except Exception:
-                return InstructionDef.model_validate(_normalize(json.loads(raw)))
+                d = _normalize(json.loads(raw))
+                # Always use the known mnemonic — LLMs often return "ADD, ADDS (immediate)"
+                # or other variants that would fail the required-field check.
+                d["mnemonic"] = mnemonic
+                result = InstructionDef.model_validate(d)
+            return result
         except Exception as exc:
             validation_errors = [str(exc)]
             log.debug("_extract_instruction attempt %d/%d failed: %s", attempt + 1, 3, exc)

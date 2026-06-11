@@ -70,6 +70,24 @@ def cli() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _parse_entity_rules(specs: tuple[str, ...] | list[str] | None) -> list:
+    """Parse repeated --entity NAME=REGEX specs into docquery EntityRule objects."""
+    from docquery.config import EntityRule
+
+    rules = []
+    for spec in specs or []:
+        if "=" not in spec:
+            click.echo(f"Error: --entity must be NAME=REGEX, got {spec!r}", err=True)
+            sys.exit(1)
+        name, pattern = spec.split("=", 1)
+        name = name.strip()
+        if not name or not pattern:
+            click.echo(f"Error: --entity must be NAME=REGEX with both parts, got {spec!r}", err=True)
+            sys.exit(1)
+        rules.append(EntityRule(name=name, pattern=pattern))
+    return rules
+
+
 @cli.command()
 @click.argument("manual", type=click.Path(exists=True))
 @click.option("--db", default=lambda: os.environ.get("CHROMA_DB_PATH"), required=True,
@@ -77,22 +95,40 @@ def cli() -> None:
 @click.option("--source", is_flag=True, default=False,
     help="Ingest source code files instead of a PDF. MANUAL must be a directory; "
          "all .c, .h, .py, .cpp, .hpp files are loaded as text chunks.")
+@click.option("--entity", "entity", multiple=True, metavar="NAME=REGEX",
+    help="Tag chunks matching REGEX as entity NAME for cursor enumeration (repeatable), "
+         r"e.g. --entity 'instruction=^A7\.7\.\d+\s+([A-Z][A-Z0-9.]+)'. Falls back to the "
+         "ENTITY_RULES env var when omitted.")
 @click.option("--embed-model", default=None, help="Override EMBED_MODEL env var")
 @click.option("--embed-base-url", default=None, help="Override EMBED_BASE_URL env var")
-def ingest(manual: str, db: str, source: bool, embed_model: str | None, embed_base_url: str | None) -> None:
+def ingest(manual: str, db: str, source: bool, entity: tuple[str, ...],
+           embed_model: str | None, embed_base_url: str | None) -> None:
     """Ingest a PDF manual (or source code directory) into a docquery RAG database.
 
     Run multiple times against the same --db to supplement an existing database
     with additional manuals — content is deduplicated by hash so there are no
     duplicate chunks.  Use this when pass 3 mnemonic discovery reports low
     coverage and the primary manual does not document all instructions.
+
+    Pass --entity to tag instruction-relevant chunks at ingest time; the decode
+    stage then enumerates exactly those tagged instructions.
     """
     import docquery
-    from docquery.config import Settings
+    from docquery.config import ENTITY_PREFIX, Settings
 
     _apply_model_overrides(None, None, embed_model, embed_base_url)
     settings = Settings()
     settings.db_path = db
+
+    cli_rules = _parse_entity_rules(entity)
+    if cli_rules:
+        # Explicit --entity overrides the env-loaded default; otherwise keep it.
+        settings.entity_rules = cli_rules
+    if settings.entity_rules:
+        click.echo(
+            "Tagging entities: "
+            + ", ".join(sorted(r.name for r in settings.entity_rules))
+        )
 
     src = Path(manual)
     if source:
@@ -112,6 +148,21 @@ def ingest(manual: str, db: str, source: bool, embed_model: str | None, embed_ba
 
     n = docquery.ingest(items, settings=settings)
     click.echo(f"Ingested {n} document(s) into {db}")
+
+    if settings.entity_rules:
+        try:
+            metas = settings.vs._collection.get(include=["metadatas"]).get("metadatas") or []
+            for rule in settings.entity_rules:
+                key = f"{ENTITY_PREFIX}{rule.name}"
+                tagged = sum(1 for m in metas if (m or {}).get(key))
+                distinct = len({
+                    name.strip()
+                    for m in metas for name in str((m or {}).get(key, "")).split(";")
+                    if name.strip()
+                })
+                click.echo(f"  tagged {tagged} chunk(s), {distinct} distinct {rule.name} entit(ies)")
+        except Exception as exc:  # reporting only — never fail the ingest
+            click.echo(f"  (could not summarise entity tags: {exc})", err=True)
 
 
 # ---------------------------------------------------------------------------
@@ -164,6 +215,10 @@ def _generate_or_append(spec, name: str, out_dir: Path, append_slaspec: str | No
 @click.option("--variant", default=None,
     help="Override the ISA variant segment in the Ghidra language ID (e.g. 'v7', 'v8'). "
          "Defaults to whatever was extracted from the manual.")
+@click.option("--reference", default=None,
+    help="Ghidra reference for mnemonic seeding and evaluation (e.g. 'ARM', 'ARM:LE:32:v7'). "
+         "When set, the decode loop is pre-seeded with only the mnemonics in the reference "
+         "that also appear in the manual, guaranteeing high instruction coverage.")
 def generate(
     db: str,
     name: str,
@@ -184,6 +239,7 @@ def generate(
     embed_model: str | None,
     embed_base_url: str | None,
     variant: str | None,
+    reference: str | None,
 ) -> None:
     """Extract ISA from database and generate a Ghidra processor module."""
     import dataclasses
@@ -228,6 +284,8 @@ def generate(
         "inter_chunk_sleep": inter_chunk_sleep,
         "resume": resume,
         "debug_save_dir": str(debug_dir),
+        "ghidra_home": str(settings.ghidra_home),
+        "reference_slaspec": reference,
         "errors": [],
     }
 
@@ -365,6 +423,9 @@ def evaluate(module_dir: str, reference: str) -> None:
 @click.option("--out", default="./output", show_default=True, help="Output directory (for generate stage)")
 @click.option("--checkpoint", required=True, type=click.Path(), help="Path to checkpoint state JSON file")
 @click.option("--source", default=None, type=click.Path(), help="PDF or source dir (ingest stage only)")
+@click.option("--entity", "entity", multiple=True, metavar="NAME=REGEX",
+              help="Tag chunks matching REGEX as entity NAME at ingest (repeatable, ingest stage). "
+                   "Falls back to the ENTITY_RULES env var when omitted.")
 @click.option("--reference", default=None, help="Reference .slaspec path (evaluate stage)")
 @click.option("--inter-chunk-sleep", default=2.0, show_default=True, help="Sleep between instruction chunks (Ollama KV GC)")
 @click.option("--max-instructions", default=None, type=int, help="Cap instruction count (decode stage)")
@@ -384,6 +445,7 @@ def run_stage_cmd(
     out: str,
     checkpoint: str,
     source: str | None,
+    entity: tuple[str, ...],
     reference: str | None,
     inter_chunk_sleep: float,
     max_instructions: int | None,
@@ -420,6 +482,12 @@ def run_stage_cmd(
     settings = Settings()
     if db:
         settings.db_path = db
+
+    cli_rules = _parse_entity_rules(entity)
+    if cli_rules:
+        # Explicit --entity overrides the env-loaded default; flows into settings_dict
+        # (as plain dicts) and is reconstructed by ingest_node.
+        settings.entity_rules = cli_rules
 
     checkpoint_path = Path(checkpoint)
     snapshot_dir = checkpoint_path.parent

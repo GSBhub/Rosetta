@@ -151,22 +151,10 @@ def _make_meta(encoding_style: str = "fixed_word") -> dict:
 
 
 def test_build_decode_graph_two_instructions(tmp_path):
-    """Smoke test: two-instruction run with mocked discovery and gather.
+    """Smoke test: two-instruction run driven by a pre-seeded mnemonic queue.
 
-    Patches the leaf functions so the full graph wiring is exercised without
-    calling an LLM.  discover returns ADD, SUB, then None to terminate.
+    The queue is passed in the initial state so no LLM discovery is needed.
     """
-    call_count = {"n": 0}
-
-    def fake_discover(last, seen, settings):
-        n = call_count["n"]
-        call_count["n"] += 1
-        if n == 0:
-            return "ADD", "SUB"
-        if n == 1:
-            return "SUB", None
-        return None, None  # terminate
-
     def fake_gather(current, next_, settings):
         return InstructionDef(
             mnemonic=current,
@@ -183,7 +171,6 @@ def test_build_decode_graph_two_instructions(tmp_path):
     settings.db_path = "/tmp/db"
 
     with (
-        patch("rosetta_instructions.discovery.discover_next", side_effect=fake_discover),
         patch("rosetta_instructions.gather.gather_instruction", side_effect=fake_gather),
         patch("rosetta_instructions.gather.enrich_pcode", side_effect=lambda i, s: i),
     ):
@@ -204,6 +191,7 @@ def test_build_decode_graph_two_instructions(tmp_path):
             "next": None,
             "iterations": 0,
             "stall_count": 0,
+            "mnemonic_queue": ["ADD", "SUB"],  # pre-seeded — no DB scan needed
             "current_def": None,
             "written": [],
             "errors": [],
@@ -216,40 +204,36 @@ def test_build_decode_graph_two_instructions(tmp_path):
 
 
 def test_build_decode_graph_terminates_on_first_none(tmp_path):
-    """If discover returns (None, None) immediately, no instructions are emitted."""
+    """An empty pre-seeded queue with last set terminates immediately without emitting."""
 
     writer = MagicMock()
     writer.lang_dir = tmp_path / "lang"
     writer.lang_dir.mkdir(parents=True)
     settings = MagicMock()
 
-    with (
-        patch("rosetta_instructions.discovery.discover_next", return_value=(None, None)),
-        patch("rosetta_instructions.gather.gather_instruction"),
-        patch("rosetta_instructions.gather.enrich_pcode", side_effect=lambda i, s: i),
-    ):
-        app = build_decode_graph(writer)
-        initial: DecodeState = {
-            "settings": settings,
-            "meta": _make_meta(),
-            "registers": [],
-            "out_dir": str(tmp_path),
-            "processor_name": "TestISA",
-            "max_iterations": None,
-            "inter_chunk_sleep": 0.0,
-            "debug_save_dir": None,
-            "resume": False,
-            "last": None,
-            "seen": [],
-            "current": None,
-            "next": None,
-            "iterations": 0,
-            "stall_count": 0,
-            "current_def": None,
-            "written": [],
-            "errors": [],
-        }
-        final = app.invoke(initial)
+    app = build_decode_graph(writer)
+    initial: DecodeState = {
+        "settings": settings,
+        "meta": _make_meta(),
+        "registers": [],
+        "out_dir": str(tmp_path),
+        "processor_name": "TestISA",
+        "max_iterations": None,
+        "inter_chunk_sleep": 0.0,
+        "debug_save_dir": None,
+        "resume": False,
+        "last": "SENTINEL",   # non-None → no DB scan triggered
+        "seen": [],
+        "current": None,
+        "next": None,
+        "iterations": 0,
+        "stall_count": 0,
+        "mnemonic_queue": [],  # empty queue → stops immediately
+        "current_def": None,
+        "written": [],
+        "errors": [],
+    }
+    final = app.invoke(initial)
 
     assert final["written"] == []
     writer.write_instruction.assert_not_called()
