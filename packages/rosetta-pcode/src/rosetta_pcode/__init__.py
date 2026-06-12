@@ -1,3 +1,3 @@
-from rosetta_pcode.node import pcode_node
+from rosetta_pcode.generator import generate_pcode
 
-__all__ = ["pcode_node"]
+__all__ = ["generate_pcode"]

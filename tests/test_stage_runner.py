@@ -81,24 +81,11 @@ def test_check_prereqs_meta_passes_with_db_path():
     check_prereqs("meta", _minimal_state())  # no exception
 
 
-def test_check_prereqs_instructions_raises_if_no_mnemonics():
-    # 'instructions' is now a legacy stage; its prereq is db_path (not mnemonics).
-    # The decode stage is the new happy-path stage with prereq meta + db_path.
+def test_check_prereqs_decode_raises_if_no_meta():
+    # decode is the happy-path extraction stage; prereq is meta + db_path.
     state = _minimal_state()  # has db_path, no meta
     with pytest.raises(ValueError, match="meta"):
         check_prereqs("decode", state)
-
-
-def test_check_prereqs_instructions_raises_if_empty_mnemonics():
-    # Legacy 'instructions' stage still registered for standalone use.
-    # Prereq is now db_path only (decode handles discovery internally).
-    state = _minimal_state()
-    check_prereqs("instructions", state)  # should not raise (db_path present)
-
-
-def test_check_prereqs_instructions_passes_with_mnemonics():
-    state = _minimal_state(mnemonics=["ADD", "SUB"])
-    check_prereqs("instructions", state)  # no exception
 
 
 def test_check_prereqs_generate_raises_if_no_meta():

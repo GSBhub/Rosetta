@@ -213,12 +213,3 @@ def _seen_from_slaspec(out_dir: Path, processor_name: str, bi_endian: bool) -> l
                 if m not in seen:
                     seen.append(m)
     return seen
-
-
-# ---------------------------------------------------------------------------
-# Legacy entry point kept for backward-compat / run-stage standalone use
-# ---------------------------------------------------------------------------
-
-def instructions_node(state: PipelineState) -> dict[str, Any]:
-    """Alias for decode_node — kept so `rosetta run-stage instructions` still works."""
-    return decode_node(state)

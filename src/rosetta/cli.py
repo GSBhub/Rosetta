@@ -237,7 +237,7 @@ def coverage(db: str, entity_type: str, expected_count: int | None, threshold: f
 
 
 def _generate_or_append(spec, name: str, out_dir: Path, append_slaspec: str | None) -> None:
-    from rosetta.generation.module_generator import ModuleGenerator
+    from rosetta_generate_sla.sla.module_generator import ModuleGenerator
     generator = ModuleGenerator()
     if append_slaspec:
         target = Path(append_slaspec)
@@ -260,14 +260,6 @@ def _generate_or_append(spec, name: str, out_dir: Path, append_slaspec: str | No
 @click.option("--spec-json", default=None, help="Load existing isa_spec.json (skip extraction)")
 @click.option("--concurrency", default=2, show_default=True, help="Parallel instruction extraction workers")
 @click.option("--max-instructions", default=None, type=int, help="Cap number of instructions extracted (useful for quick tests)")
-@click.option("--max-pcode", default=None, type=int, help="Limit P-code generation (pass 5) to first N instructions")
-@click.option("--stop-after", default=None,
-    type=click.Choice(["meta", "registers", "mnemonics", "stubs", "instructions"]),
-    help="Stop extraction after this pass. 'stubs' creates minimal InstructionDefs "
-         "for all discovered mnemonics (no per-instruction LLM calls) — fast path "
-         "to maximum mnemonic coverage.")
-@click.option("--filter-mnemonics", default=None,
-    help="Comma-separated glob patterns to keep after pass 3, e.g. 'MOV*,ADD,SUB*'")
 @click.option("--append-slaspec", default=None, type=click.Path(),
     help="Append new instruction constructors to this .slaspec instead of generating a full module")
 @click.option("--chunk-size", default=None, type=int, help="Instructions per asyncio.gather() batch in pass 4. Defaults to --concurrency.")
@@ -292,9 +284,6 @@ def generate(
     spec_json: str | None,
     concurrency: int,
     max_instructions: int | None,
-    max_pcode: int | None,
-    stop_after: str | None,
-    filter_mnemonics: str | None,
     append_slaspec: str | None,
     chunk_size: int | None,
     memory_warn_gb: float,
@@ -342,9 +331,6 @@ def generate(
         "out_dir": str(out_dir),
         "max_concurrent": concurrency,
         "max_instructions": max_instructions,
-        "max_pcode": max_pcode,
-        "stop_after": stop_after,
-        "filter_mnemonics": filter_mnemonics,
         "chunk_size": chunk_size,
         "memory_warn_gb": memory_warn_gb,
         "inter_chunk_sleep": inter_chunk_sleep,
@@ -362,17 +348,6 @@ def generate(
     for err in final_state.get("errors", []):
         click.echo(f"Warning: {err}", err=True)
 
-    # ── Handle stop_after ───────────────────────────────────────────────────
-    if stop_after and stop_after not in ("stubs", "instructions"):
-        spec = get_isa_spec(final_state)
-        if spec:
-            partial_path = debug_dir / f"{name}_partial_{stop_after}.json"
-            partial_path.write_text(spec.model_dump_json(indent=2))
-            click.echo(f"Stopped after '{stop_after}' → {partial_path}")
-        else:
-            click.echo(f"Stopped after '{stop_after}' (no spec to save)")
-        return
-
     # ── Cache ISASpec ───────────────────────────────────────────────────────
     spec = get_isa_spec(final_state)
     if spec:
@@ -386,7 +361,7 @@ def generate(
     lang_dir = final_state.get("lang_dir")
     if lang_dir:
         click.echo(f"Module written to {lang_dir}")
-    elif not stop_after:
+    else:
         click.echo("Warning: no output module was generated", err=True)
 
     if append_slaspec and spec:

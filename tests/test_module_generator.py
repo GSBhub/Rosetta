@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from rosetta.generation.module_generator import ModuleGenerator
+from rosetta_generate_sla.sla.module_generator import ModuleGenerator
 
 
 def test_generates_four_files(tmp_path, minimal_spec):
@@ -77,7 +77,7 @@ def test_output_directory_structure(tmp_path, minimal_spec):
 
 
 def test_64bit_word_size(tmp_path):
-    from rosetta.extraction.schemas import ISAMeta, ISASpec, RegisterDef, InstructionDef
+    from rosetta_schemas.models import ISAMeta, ISASpec, RegisterDef, InstructionDef
     spec = ISASpec(
         meta=ISAMeta(name="MyISA64", endian="big", word_size_bits=64, alignment=8, instruction_sizes_bits=[64]),
         registers=[RegisterDef(name="X0", size_bits=64, description="GP"), RegisterDef(name="PC", size_bits=64, description="PC")],

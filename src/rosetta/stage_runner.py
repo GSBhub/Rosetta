@@ -46,21 +46,9 @@ def _import_registers():
     from rosetta_registers.node import registers_node
     return registers_node
 
-def _import_mnemonics():
-    from rosetta_mnemonics.node import mnemonics_node
-    return mnemonics_node
-
 def _import_decode():
     from rosetta_instructions.node import decode_node
     return decode_node
-
-def _import_instructions():
-    from rosetta_instructions.node import instructions_node
-    return instructions_node
-
-def _import_pcode():
-    from rosetta_pcode.node import pcode_node
-    return pcode_node
 
 def _import_generate():
     from rosetta_generate_sla.node import generate_sla_node
@@ -86,12 +74,9 @@ STAGE_REGISTRY: dict[str, tuple[Callable, list[str]]] = {
     "generate":     (_import_generate,     ["meta", "processor_name", "out_dir"]),
     "validate":     (_import_validate,     ["lang_dir", "ghidra_home"]),
     "evaluate":     (_import_evaluate,     ["lang_dir", "reference_slaspec"]),
-    # ── Legacy / debugging stages (kept for run-stage standalone use) ─────────
-    "mnemonics":    (_import_mnemonics,    ["db_path"]),
+    # ── Legacy CISC stages (kept until opcode_table is folded into decode) ────
     "opcode_map":       (_import_opcode_map,       ["meta", "db_path"]),
     "opcode_map_pcode": (_import_opcode_map_pcode, ["opcode_map", "meta"]),
-    "instructions":     (_import_instructions,     ["db_path"]),
-    "pcode":        (_import_pcode,        ["instructions"]),
 }
 
 # The canonical order for `run-stage all`
@@ -152,7 +137,6 @@ def _find_producer(key: str) -> str | None:
     _produces: dict[str, str] = {
         "meta": "meta",
         "registers": "registers",
-        "mnemonics": "mnemonics",
         "opcode_map": "opcode_map",
         "instructions": "decode",
         "lang_dir": "decode",
@@ -231,28 +215,6 @@ def summarize_and_warn(stage: str, state: dict[str, Any]) -> None:
             log.warning("decode: lang_dir not set — writer may have failed")
         else:
             log.info("decode: %d instructions written, lang_dir=%s", len(instrs), lang_dir)
-
-    elif stage == "mnemonics":
-        mn = state.get("mnemonics") or []
-        if not mn:
-            log.warning("mnemonics: empty — discovery returned nothing")
-        else:
-            log.info("mnemonics: %d discovered (sample: %s)", len(mn), mn[:5])
-
-    elif stage == "instructions":
-        instrs = state.get("instructions") or []
-        if not instrs:
-            log.warning("instructions: empty — no instructions extracted")
-        else:
-            log.info("instructions: %d extracted", len(instrs))
-
-    elif stage == "pcode":
-        instrs = state.get("instructions") or []
-        with_hint = sum(1 for i in instrs if i.get("pcode_hint"))
-        if with_hint == 0:
-            log.warning("pcode: no instructions received a pcode_hint")
-        else:
-            log.info("pcode: %d / %d instructions have pcode_hint", with_hint, len(instrs))
 
     elif stage == "generate":
         lang_dir = state.get("lang_dir")

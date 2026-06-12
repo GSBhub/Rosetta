@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from rosetta.extraction.schemas import ISAMeta, ISASpec, InstructionDef, RegisterDef
+from rosetta_schemas.models import ISAMeta, ISASpec, InstructionDef, RegisterDef
 
 
 def test_isa_meta_valid():
