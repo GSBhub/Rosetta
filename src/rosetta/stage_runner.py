@@ -34,29 +34,13 @@ def _import_classify():
     from rosetta_classify.node import classify_node
     return classify_node
 
-def _import_opcode_map():
-    from rosetta_opcode_map.node import opcode_map_node
-    return opcode_map_node
-
-def _import_opcode_map_pcode():
-    from rosetta_opcode_map.pcode_node import opcode_map_pcode_node
-    return opcode_map_pcode_node
-
 def _import_registers():
     from rosetta_registers.node import registers_node
     return registers_node
 
-def _import_mnemonics():
-    from rosetta_mnemonics.node import mnemonics_node
-    return mnemonics_node
-
-def _import_instructions():
-    from rosetta_instructions.node import instructions_node
-    return instructions_node
-
-def _import_pcode():
-    from rosetta_pcode.node import pcode_node
-    return pcode_node
+def _import_decode():
+    from rosetta_instructions.node import decode_node
+    return decode_node
 
 def _import_generate():
     from rosetta_generate_sla.node import generate_sla_node
@@ -73,21 +57,22 @@ def _import_evaluate():
 
 # (node_import, required_keys_for_prereq_check)
 STAGE_REGISTRY: dict[str, tuple[Callable, list[str]]] = {
+    # ── Happy-path stages (run-stage all) ─────────────────────────────────────
     "ingest":       (_import_ingest,       ["source_path", "db_path"]),
     "meta":         (_import_meta,         ["db_path"]),
     "classify":     (_import_classify,     ["meta", "db_path"]),
     "registers":    (_import_registers,    ["db_path"]),
-    "mnemonics":    (_import_mnemonics,    ["db_path"]),
-    "opcode_map":       (_import_opcode_map,       ["meta", "db_path"]),
-    "opcode_map_pcode": (_import_opcode_map_pcode, ["opcode_map", "meta"]),
-    "instructions":     (_import_instructions,     ["mnemonics", "db_path"]),
-    "pcode":        (_import_pcode,        ["instructions"]),
+    "decode":       (_import_decode,       ["meta", "db_path"]),
     "generate":     (_import_generate,     ["meta", "processor_name", "out_dir"]),
     "validate":     (_import_validate,     ["lang_dir", "ghidra_home"]),
     "evaluate":     (_import_evaluate,     ["lang_dir", "reference_slaspec"]),
 }
 
-STAGE_ORDER = list(STAGE_REGISTRY.keys())
+# The canonical order for `run-stage all`
+STAGE_ORDER = [
+    "ingest", "meta", "classify", "registers",
+    "decode", "generate", "validate", "evaluate",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -141,10 +126,8 @@ def _find_producer(key: str) -> str | None:
     _produces: dict[str, str] = {
         "meta": "meta",
         "registers": "registers",
-        "mnemonics": "mnemonics",
-        "opcode_map": "opcode_map",
-        "instructions": "instructions",
-        "lang_dir": "generate",
+        "instructions": "decode",
+        "lang_dir": "decode",
         "ghidra_home": "initial state (pass --checkpoint with ghidra_home set)",
         "reference_slaspec": "initial state (pass --reference)",
         "source_path": "initial state (pass --source)",
@@ -186,26 +169,6 @@ def summarize_and_warn(stage: str, state: dict[str, Any]) -> None:
         else:
             log.info("classify: encoding_style=%r", style)
 
-    elif stage == "opcode_map":
-        om = state.get("opcode_map") or []
-        mn = state.get("mnemonics") or []
-        if not om:
-            meta = state.get("meta") or {}
-            if meta.get("encoding_style") == "opcode_table":
-                log.warning("opcode_map: empty — extraction failed for opcode_table ISA")
-            else:
-                log.info("opcode_map: skipped (encoding_style=%r)", meta.get("encoding_style"))
-        else:
-            log.info("opcode_map: %d entries, %d unique mnemonics", len(om), len(mn))
-
-    elif stage == "opcode_map_pcode":
-        om = state.get("opcode_map") or []
-        with_pcode = sum(1 for e in om if e.get("pcode_body"))
-        if with_pcode == 0:
-            log.warning("opcode_map_pcode: no entries received pcode_body")
-        else:
-            log.info("opcode_map_pcode: %d / %d entries have pcode_body", with_pcode, len(om))
-
     elif stage == "registers":
         regs = state.get("registers") or []
         if not regs:
@@ -213,31 +176,16 @@ def summarize_and_warn(stage: str, state: dict[str, Any]) -> None:
         else:
             log.info("registers: %d registers (first: %s)", len(regs), regs[0].get("name"))
 
-    elif stage == "mnemonics":
-        mn = state.get("mnemonics") or []
-        if not mn:
-            log.warning("mnemonics: empty — discovery returned nothing")
-        else:
-            log.info("mnemonics: %d discovered (sample: %s)", len(mn), mn[:5])
-
-    elif stage == "instructions":
+    elif stage == "decode":
         instrs = state.get("instructions") or []
-        mn = state.get("mnemonics") or []
-        if not instrs:
-            log.warning("instructions: empty — no instructions extracted")
+        opcode_map = state.get("opcode_map") or []
+        lang_dir = state.get("lang_dir")
+        if not lang_dir:
+            log.warning("decode: lang_dir not set — writer may have failed")
+        elif opcode_map:
+            log.info("decode: %d opcode-table entries written, lang_dir=%s", len(opcode_map), lang_dir)
         else:
-            log.info("instructions: %d extracted (of %d mnemonics)", len(instrs), len(mn))
-            no_semantics = sum(1 for i in instrs if not i.get("semantics"))
-            if no_semantics:
-                log.warning("instructions: %d entries have empty semantics", no_semantics)
-
-    elif stage == "pcode":
-        instrs = state.get("instructions") or []
-        with_hint = sum(1 for i in instrs if i.get("pcode_hint"))
-        if with_hint == 0:
-            log.warning("pcode: no instructions received a pcode_hint")
-        else:
-            log.info("pcode: %d / %d instructions have pcode_hint", with_hint, len(instrs))
+            log.info("decode: %d instructions written, lang_dir=%s", len(instrs), lang_dir)
 
     elif stage == "generate":
         lang_dir = state.get("lang_dir")
@@ -295,8 +243,9 @@ def build_initial_state(
     source_path: str | None,
     inter_chunk_sleep: float,
     max_instructions: int | None,
-    max_pcode: int | None,
     memory_warn_gb: float,
+    output_format: str = "sla",
+    max_iterations: int | None = None,
 ) -> dict[str, Any]:
     debug_save_dir = str(Path(db_path).parent)
     state: dict[str, Any] = {
@@ -306,16 +255,15 @@ def build_initial_state(
         "out_dir": out_dir,
         "ghidra_home": ghidra_home,
         "debug_save_dir": debug_save_dir,
+        "output_format": output_format,
+        "max_iterations": max_iterations,
         # Singleton concurrency
         "max_concurrent": 1,
         "chunk_size": 1,
         "inter_chunk_sleep": inter_chunk_sleep,
         "memory_warn_gb": memory_warn_gb,
         "max_instructions": max_instructions,
-        "max_pcode": max_pcode,
         "resume": False,
-        "stop_after": None,
-        "filter_mnemonics": None,
         "errors": [],
     }
     if source_path:

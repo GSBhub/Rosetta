@@ -20,19 +20,17 @@ class PipelineState(TypedDict, total=False):
     # ── Extraction config ─────────────────────────────────────────────────────
     max_concurrent: int
     max_instructions: int | None
-    max_pcode: int | None
-    filter_mnemonics: str | None   # comma-separated glob patterns e.g. "MOV*,ADD"
+    max_iterations: int | None   # cursor guard for decode loop (defaults to auto from count query)
+    output_format: str           # "sla" (default); selects the InstructionWriter implementation
     memory_warn_gb: float
     chunk_size: int | None
     inter_chunk_sleep: float
     resume: bool
-    stop_after: str | None     # "meta"|"registers"|"mnemonics"|"stubs"|"instructions"|None
     debug_save_dir: str | None
 
     # ── Per-pass outputs (Pydantic models serialized as model_dump() dicts) ───
     meta: dict[str, Any] | None
     registers: list[dict[str, Any]]
-    mnemonics: list[str]
     instructions: list[dict[str, Any]]
     opcode_map: list[dict[str, Any]]    # OpcodeDef rows for opcode_table ISAs
 

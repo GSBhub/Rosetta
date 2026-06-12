@@ -81,21 +81,11 @@ def test_check_prereqs_meta_passes_with_db_path():
     check_prereqs("meta", _minimal_state())  # no exception
 
 
-def test_check_prereqs_instructions_raises_if_no_mnemonics():
-    state = _minimal_state()  # missing mnemonics
-    with pytest.raises(ValueError, match="mnemonics"):
-        check_prereqs("instructions", state)
-
-
-def test_check_prereqs_instructions_raises_if_empty_mnemonics():
-    state = _minimal_state(mnemonics=[])
-    with pytest.raises(ValueError, match="mnemonics"):
-        check_prereqs("instructions", state)
-
-
-def test_check_prereqs_instructions_passes_with_mnemonics():
-    state = _minimal_state(mnemonics=["ADD", "SUB"])
-    check_prereqs("instructions", state)  # no exception
+def test_check_prereqs_decode_raises_if_no_meta():
+    # decode is the happy-path extraction stage; prereq is meta + db_path.
+    state = _minimal_state()  # has db_path, no meta
+    with pytest.raises(ValueError, match="meta"):
+        check_prereqs("decode", state)
 
 
 def test_check_prereqs_generate_raises_if_no_meta():
@@ -167,9 +157,10 @@ def test_run_stage_unknown_stage_raises():
 
 
 def test_run_stage_missing_prereq_raises():
-    state = _minimal_state()  # no mnemonics
-    with pytest.raises(ValueError, match="mnemonics"):
-        run_stage(state, "instructions")
+    # decode stage requires meta; a minimal state with only db_path should fail.
+    state = _minimal_state()  # no meta
+    with pytest.raises(ValueError, match="meta"):
+        run_stage(state, "decode")
 
 
 def test_run_stage_preserves_prior_errors():
@@ -213,7 +204,6 @@ def test_build_initial_state_singleton_concurrency():
         source_path=None,
         inter_chunk_sleep=2.0,
         max_instructions=None,
-        max_pcode=None,
         memory_warn_gb=2.0,
     )
     assert state["max_concurrent"] == 1
@@ -227,7 +217,7 @@ def test_build_initial_state_sets_ghidra_home():
         settings_dict={}, ghidra_home="/tools/ghidra",
         reference_slaspec=None, source_path=None,
         inter_chunk_sleep=0.0, max_instructions=None,
-        max_pcode=None, memory_warn_gb=2.0,
+        memory_warn_gb=2.0,
     )
     assert state["ghidra_home"] == "/tools/ghidra"
 
@@ -239,7 +229,7 @@ def test_build_initial_state_includes_reference_and_source():
         reference_slaspec="/ref/ARM6_le.slaspec",
         source_path="/manuals/arm.pdf",
         inter_chunk_sleep=0.0, max_instructions=None,
-        max_pcode=None, memory_warn_gb=2.0,
+        memory_warn_gb=2.0,
     )
     assert state["reference_slaspec"] == "/ref/ARM6_le.slaspec"
     assert state["source_path"] == "/manuals/arm.pdf"
@@ -251,7 +241,7 @@ def test_build_initial_state_omits_source_when_none():
         settings_dict={}, ghidra_home="/g",
         reference_slaspec=None, source_path=None,
         inter_chunk_sleep=0.0, max_instructions=None,
-        max_pcode=None, memory_warn_gb=2.0,
+        memory_warn_gb=2.0,
     )
     assert "source_path" not in state
 
@@ -261,9 +251,13 @@ def test_build_initial_state_omits_source_when_none():
 # ---------------------------------------------------------------------------
 
 def test_stage_order_covers_all_pipeline_nodes():
-    expected = ["ingest", "meta", "classify", "registers", "mnemonics",
-                "opcode_map", "opcode_map_pcode", "instructions", "pcode",
-                "generate", "validate", "evaluate"]
+    # Happy-path order. The old batch/CISC stages (mnemonics/opcode_map/
+    # opcode_map_pcode/instructions/pcode) have been removed entirely; CISC is
+    # now handled inside `decode` via encoding_style dispatch.
+    expected = [
+        "ingest", "meta", "classify", "registers",
+        "decode", "generate", "validate", "evaluate",
+    ]
     assert STAGE_ORDER == expected
 
 
@@ -285,6 +279,6 @@ def test_summarize_evaluate_does_not_raise():
     summarize_and_warn("evaluate", state)  # should not raise
 
 
-def test_summarize_empty_instructions_does_not_raise():
-    state = {"instructions": [], "mnemonics": ["ADD"], "errors": []}
-    summarize_and_warn("instructions", state)
+def test_summarize_decode_does_not_raise():
+    state = {"instructions": [], "opcode_map": [], "lang_dir": "/out/languages", "errors": []}
+    summarize_and_warn("decode", state)  # should not raise

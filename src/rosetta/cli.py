@@ -70,6 +70,24 @@ def cli() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _parse_entity_rules(specs: tuple[str, ...] | list[str] | None) -> list:
+    """Parse repeated --entity NAME=REGEX specs into docquery EntityRule objects."""
+    from docquery.config import EntityRule
+
+    rules = []
+    for spec in specs or []:
+        if "=" not in spec:
+            click.echo(f"Error: --entity must be NAME=REGEX, got {spec!r}", err=True)
+            sys.exit(1)
+        name, pattern = spec.split("=", 1)
+        name = name.strip()
+        if not name or not pattern:
+            click.echo(f"Error: --entity must be NAME=REGEX with both parts, got {spec!r}", err=True)
+            sys.exit(1)
+        rules.append(EntityRule(name=name, pattern=pattern))
+    return rules
+
+
 @cli.command()
 @click.argument("manual", type=click.Path(exists=True))
 @click.option("--db", default=lambda: os.environ.get("CHROMA_DB_PATH"), required=True,
@@ -77,22 +95,40 @@ def cli() -> None:
 @click.option("--source", is_flag=True, default=False,
     help="Ingest source code files instead of a PDF. MANUAL must be a directory; "
          "all .c, .h, .py, .cpp, .hpp files are loaded as text chunks.")
+@click.option("--entity", "entity", multiple=True, metavar="NAME=REGEX",
+    help="Tag chunks matching REGEX as entity NAME for cursor enumeration (repeatable), "
+         r"e.g. --entity 'instruction=^A7\.7\.\d+\s+([A-Z][A-Z0-9.]+)'. Falls back to the "
+         "ENTITY_RULES env var when omitted.")
 @click.option("--embed-model", default=None, help="Override EMBED_MODEL env var")
 @click.option("--embed-base-url", default=None, help="Override EMBED_BASE_URL env var")
-def ingest(manual: str, db: str, source: bool, embed_model: str | None, embed_base_url: str | None) -> None:
+def ingest(manual: str, db: str, source: bool, entity: tuple[str, ...],
+           embed_model: str | None, embed_base_url: str | None) -> None:
     """Ingest a PDF manual (or source code directory) into a docquery RAG database.
 
     Run multiple times against the same --db to supplement an existing database
     with additional manuals — content is deduplicated by hash so there are no
     duplicate chunks.  Use this when pass 3 mnemonic discovery reports low
     coverage and the primary manual does not document all instructions.
+
+    Pass --entity to tag instruction-relevant chunks at ingest time; the decode
+    stage then enumerates exactly those tagged instructions.
     """
     import docquery
-    from docquery.config import Settings
+    from docquery.config import ENTITY_PREFIX, Settings
 
     _apply_model_overrides(None, None, embed_model, embed_base_url)
     settings = Settings()
     settings.db_path = db
+
+    cli_rules = _parse_entity_rules(entity)
+    if cli_rules:
+        # Explicit --entity overrides the env-loaded default; otherwise keep it.
+        settings.entity_rules = cli_rules
+    if settings.entity_rules:
+        click.echo(
+            "Tagging entities: "
+            + ", ".join(sorted(r.name for r in settings.entity_rules))
+        )
 
     src = Path(manual)
     if source:
@@ -113,6 +149,87 @@ def ingest(manual: str, db: str, source: bool, embed_model: str | None, embed_ba
     n = docquery.ingest(items, settings=settings)
     click.echo(f"Ingested {n} document(s) into {db}")
 
+    if settings.entity_rules:
+        try:
+            metas = settings.vs._collection.get(include=["metadatas"]).get("metadatas") or []
+            for rule in settings.entity_rules:
+                key = f"{ENTITY_PREFIX}{rule.name}"
+                tagged = sum(1 for m in metas if (m or {}).get(key))
+                distinct = len({
+                    name.strip()
+                    for m in metas for name in str((m or {}).get(key, "")).split(";")
+                    if name.strip()
+                })
+                click.echo(f"  tagged {tagged} chunk(s), {distinct} distinct {rule.name} entit(ies)")
+        except Exception as exc:  # reporting only — never fail the ingest
+            click.echo(f"  (could not summarise entity tags: {exc})", err=True)
+
+        # Coverage gate (warn-only at ingest): how complete is discovery vs the
+        # document's own outline? Never fails ingest; use `rosetta coverage
+        # --fail-under` for a hard gate.
+        try:
+            from rosetta_utils.coverage import check_coverage
+            ok, msg = check_coverage(settings)
+            click.echo(f"  coverage: {msg}")
+            if not ok:
+                click.echo("  (re-ingest with broader --entity rules to raise coverage)", err=True)
+        except Exception as exc:
+            click.echo(f"  (coverage gate unavailable: {exc})", err=True)
+
+
+# ---------------------------------------------------------------------------
+# coverage
+# ---------------------------------------------------------------------------
+
+
+@cli.command()
+@click.option("--db", default=lambda: os.environ.get("CHROMA_DB_PATH"), required=True,
+    help="ChromaDB path (defaults to $CHROMA_DB_PATH)")
+@click.option("--entity-type", default="instruction", show_default=True,
+    help="Entity type to report coverage for")
+@click.option("--expected-count", default=None, type=int,
+    help="Expected entity count (overrides the outline-derived estimate)")
+@click.option("--threshold", default=0.9, show_default=True, type=float,
+    help="Minimum fraction of expected entities for the gate to pass")
+@click.option("--fail-under", is_flag=True, default=False,
+    help="Exit non-zero when coverage is below threshold")
+@click.option("--embed-model", default=None, help="Override EMBED_MODEL env var")
+@click.option("--embed-base-url", default=None, help="Override EMBED_BASE_URL env var")
+def coverage(db: str, entity_type: str, expected_count: int | None, threshold: float,
+             fail_under: bool, embed_model: str | None, embed_base_url: str | None) -> None:
+    """Report structural discovery coverage for a ChromaDB store.
+
+    Prints distinct tagged-entity counts per type (and per section), then a gate
+    verdict comparing the selected entity type against an expected count (from
+    --expected-count or the document outline). With --fail-under, exits non-zero
+    when coverage is below --threshold.
+    """
+    import docquery
+    from docquery.config import Settings
+    from rosetta_utils.coverage import check_coverage
+
+    _apply_model_overrides(None, None, embed_model, embed_base_url)
+    settings = Settings()
+    settings.db_path = db
+
+    cov = docquery.coverage(settings=settings)
+    if not cov:
+        click.echo(f"No tagged entities found in {db}.")
+        click.echo("Re-ingest with `--entity NAME=REGEX` to enable structural discovery.")
+        sys.exit(1 if fail_under else 0)
+
+    for etype, info in cov.items():
+        click.echo(f"{etype}: {info['count']} distinct")
+        for section, count in info.get("by_section", {}).items():
+            click.echo(f"  {section or '(unsectioned)'}: {count}")
+
+    ok, msg = check_coverage(
+        settings, entity_type=entity_type, expected=expected_count, threshold=threshold,
+    )
+    click.echo(f"gate [{entity_type}]: {msg}")
+    if fail_under and not ok:
+        sys.exit(1)
+
 
 # ---------------------------------------------------------------------------
 # generate
@@ -120,7 +237,7 @@ def ingest(manual: str, db: str, source: bool, embed_model: str | None, embed_ba
 
 
 def _generate_or_append(spec, name: str, out_dir: Path, append_slaspec: str | None) -> None:
-    from rosetta.generation.module_generator import ModuleGenerator
+    from rosetta_generate_sla.sla.module_generator import ModuleGenerator
     generator = ModuleGenerator()
     if append_slaspec:
         target = Path(append_slaspec)
@@ -143,14 +260,6 @@ def _generate_or_append(spec, name: str, out_dir: Path, append_slaspec: str | No
 @click.option("--spec-json", default=None, help="Load existing isa_spec.json (skip extraction)")
 @click.option("--concurrency", default=2, show_default=True, help="Parallel instruction extraction workers")
 @click.option("--max-instructions", default=None, type=int, help="Cap number of instructions extracted (useful for quick tests)")
-@click.option("--max-pcode", default=None, type=int, help="Limit P-code generation (pass 5) to first N instructions")
-@click.option("--stop-after", default=None,
-    type=click.Choice(["meta", "registers", "mnemonics", "stubs", "instructions"]),
-    help="Stop extraction after this pass. 'stubs' creates minimal InstructionDefs "
-         "for all discovered mnemonics (no per-instruction LLM calls) — fast path "
-         "to maximum mnemonic coverage.")
-@click.option("--filter-mnemonics", default=None,
-    help="Comma-separated glob patterns to keep after pass 3, e.g. 'MOV*,ADD,SUB*'")
 @click.option("--append-slaspec", default=None, type=click.Path(),
     help="Append new instruction constructors to this .slaspec instead of generating a full module")
 @click.option("--chunk-size", default=None, type=int, help="Instructions per asyncio.gather() batch in pass 4. Defaults to --concurrency.")
@@ -164,6 +273,10 @@ def _generate_or_append(spec, name: str, out_dir: Path, append_slaspec: str | No
 @click.option("--variant", default=None,
     help="Override the ISA variant segment in the Ghidra language ID (e.g. 'v7', 'v8'). "
          "Defaults to whatever was extracted from the manual.")
+@click.option("--reference", default=None,
+    help="Ghidra reference for mnemonic seeding and evaluation (e.g. 'ARM', 'ARM:LE:32:v7'). "
+         "When set, the decode loop is pre-seeded with only the mnemonics in the reference "
+         "that also appear in the manual, guaranteeing high instruction coverage.")
 def generate(
     db: str,
     name: str,
@@ -171,9 +284,6 @@ def generate(
     spec_json: str | None,
     concurrency: int,
     max_instructions: int | None,
-    max_pcode: int | None,
-    stop_after: str | None,
-    filter_mnemonics: str | None,
     append_slaspec: str | None,
     chunk_size: int | None,
     memory_warn_gb: float,
@@ -184,6 +294,7 @@ def generate(
     embed_model: str | None,
     embed_base_url: str | None,
     variant: str | None,
+    reference: str | None,
 ) -> None:
     """Extract ISA from database and generate a Ghidra processor module."""
     import dataclasses
@@ -220,14 +331,13 @@ def generate(
         "out_dir": str(out_dir),
         "max_concurrent": concurrency,
         "max_instructions": max_instructions,
-        "max_pcode": max_pcode,
-        "stop_after": stop_after,
-        "filter_mnemonics": filter_mnemonics,
         "chunk_size": chunk_size,
         "memory_warn_gb": memory_warn_gb,
         "inter_chunk_sleep": inter_chunk_sleep,
         "resume": resume,
         "debug_save_dir": str(debug_dir),
+        "ghidra_home": str(settings.ghidra_home),
+        "reference_slaspec": reference,
         "errors": [],
     }
 
@@ -237,17 +347,6 @@ def generate(
 
     for err in final_state.get("errors", []):
         click.echo(f"Warning: {err}", err=True)
-
-    # ── Handle stop_after ───────────────────────────────────────────────────
-    if stop_after and stop_after not in ("stubs", "instructions"):
-        spec = get_isa_spec(final_state)
-        if spec:
-            partial_path = debug_dir / f"{name}_partial_{stop_after}.json"
-            partial_path.write_text(spec.model_dump_json(indent=2))
-            click.echo(f"Stopped after '{stop_after}' → {partial_path}")
-        else:
-            click.echo(f"Stopped after '{stop_after}' (no spec to save)")
-        return
 
     # ── Cache ISASpec ───────────────────────────────────────────────────────
     spec = get_isa_spec(final_state)
@@ -262,7 +361,7 @@ def generate(
     lang_dir = final_state.get("lang_dir")
     if lang_dir:
         click.echo(f"Module written to {lang_dir}")
-    elif not stop_after:
+    else:
         click.echo("Warning: no output module was generated", err=True)
 
     if append_slaspec and spec:
@@ -365,11 +464,16 @@ def evaluate(module_dir: str, reference: str) -> None:
 @click.option("--out", default="./output", show_default=True, help="Output directory (for generate stage)")
 @click.option("--checkpoint", required=True, type=click.Path(), help="Path to checkpoint state JSON file")
 @click.option("--source", default=None, type=click.Path(), help="PDF or source dir (ingest stage only)")
+@click.option("--entity", "entity", multiple=True, metavar="NAME=REGEX",
+              help="Tag chunks matching REGEX as entity NAME at ingest (repeatable, ingest stage). "
+                   "Falls back to the ENTITY_RULES env var when omitted.")
 @click.option("--reference", default=None, help="Reference .slaspec path (evaluate stage)")
 @click.option("--inter-chunk-sleep", default=2.0, show_default=True, help="Sleep between instruction chunks (Ollama KV GC)")
-@click.option("--max-instructions", default=None, type=int, help="Cap instruction count (instructions stage)")
-@click.option("--max-pcode", default=None, type=int, help="Cap pcode generation (pcode stage)")
+@click.option("--max-instructions", default=None, type=int, help="Cap instruction count (decode stage)")
+@click.option("--max-iterations", default=None, type=int, help="Hard cap on cursor iterations in decode loop")
 @click.option("--memory-warn-gb", default=2.0, show_default=True, help="Free RAM warning threshold in GB")
+@click.option("--output-format", default="sla", show_default=True,
+              help="Output format for the decode stage (default: sla)")
 @click.option("--llm-model", default=None, help="Override LLM_MODEL env var")
 @click.option("--llm-base-url", default=None, help="Override LLM_BASE_URL env var")
 @click.option("--embed-model", default=None, help="Override EMBED_MODEL env var")
@@ -381,11 +485,13 @@ def run_stage_cmd(
     out: str,
     checkpoint: str,
     source: str | None,
+    entity: tuple[str, ...],
     reference: str | None,
     inter_chunk_sleep: float,
     max_instructions: int | None,
-    max_pcode: int | None,
+    max_iterations: int | None,
     memory_warn_gb: float,
+    output_format: str,
     llm_model: str | None,
     llm_base_url: str | None,
     embed_model: str | None,
@@ -393,8 +499,8 @@ def run_stage_cmd(
 ) -> None:
     """Run a single pipeline stage (or 'all') with checkpoint-based I/O.
 
-    STAGE is one of: ingest meta registers mnemonics instructions pcode
-    generate validate evaluate  — or 'all' to run the full sequence.
+    STAGE is one of: ingest meta classify registers decode generate validate evaluate
+    — or 'all' to run the full sequence.
 
     A checkpoint JSON file accumulates state across stages so each run
     reads the previous stage's output and adds its own.  Per-stage
@@ -416,6 +522,12 @@ def run_stage_cmd(
     if db:
         settings.db_path = db
 
+    cli_rules = _parse_entity_rules(entity)
+    if cli_rules:
+        # Explicit --entity overrides the env-loaded default; flows into settings_dict
+        # (as plain dicts) and is reconstructed by ingest_node.
+        settings.entity_rules = cli_rules
+
     checkpoint_path = Path(checkpoint)
     snapshot_dir = checkpoint_path.parent
 
@@ -435,8 +547,9 @@ def run_stage_cmd(
             source_path=source,
             inter_chunk_sleep=inter_chunk_sleep,
             max_instructions=max_instructions,
-            max_pcode=max_pcode,
             memory_warn_gb=memory_warn_gb,
+            output_format=output_format,
+            max_iterations=max_iterations,
         )
     else:
         # Refresh mutable inputs that may differ per invocation
@@ -455,8 +568,9 @@ def run_stage_cmd(
         state["inter_chunk_sleep"] = inter_chunk_sleep
         if max_instructions is not None:
             state["max_instructions"] = max_instructions
-        if max_pcode is not None:
-            state["max_pcode"] = max_pcode
+        if max_iterations is not None:
+            state["max_iterations"] = max_iterations
+        state["output_format"] = output_format
 
     stages_to_run = STAGE_ORDER if stage == "all" else [stage]
 

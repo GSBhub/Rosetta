@@ -2,7 +2,7 @@
 
 import pytest
 
-from rosetta.generation.module_generator import ModuleGenerator
+from rosetta_generate_sla.sla.module_generator import ModuleGenerator
 from rosetta.validation.sleigh_compiler import SleighResult, compile_slaspec
 from tests.conftest import GHIDRA_HOME, requires_ghidra
 

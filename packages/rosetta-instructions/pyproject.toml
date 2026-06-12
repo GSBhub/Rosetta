@@ -5,6 +5,9 @@ requires-python = ">=3.12"
 dependencies = [
     "rosetta-schemas",
     "rosetta-utils",
+    "rosetta-pcode",
+    "rosetta-generate-sla",
+    "langgraph",
     "docquery @ git+https://github.com/gsbhub/docquery",
 ]
 
@@ -21,6 +24,8 @@ packages = ["src/rosetta_instructions"]
 [tool.uv.sources]
 rosetta-schemas = { workspace = true }
 rosetta-utils = { workspace = true }
+rosetta-pcode = { workspace = true }
+rosetta-generate-sla = { workspace = true }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

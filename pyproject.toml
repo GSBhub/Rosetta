@@ -11,8 +11,6 @@ dependencies = [
     "rosetta-meta",
     "rosetta-classify",
     "rosetta-registers",
-    "rosetta-mnemonics",
-    "rosetta-opcode-map",
     "rosetta-instructions",
     "rosetta-pcode",
     "rosetta-generate-sla",
@@ -45,6 +43,18 @@ allow-direct-references = true
 [tool.hatch.build.targets.wheel]
 packages = ["src/rosetta"]
 
+[tool.uv]
+# docquery transitively pins the abandoned standalone `pdfminer` (20191125, lacks
+# `open_filename`) alongside `pdfminer-six`; the standalone shadows six's utils.py.
+# It also leaves `pdfminer-six` unbounded, and the newest release (20260107) drops
+# `open_filename`, which unstructured 0.22.x's PDF partitioner imports. Drop the
+# standalone via an unsatisfiable marker and pin a six version that still has it.
+# TODO: remove once docquery's pyproject is fixed to depend on pdfminer-six only.
+override-dependencies = [
+    "pdfminer ; sys_platform == 'no-such-platform'",
+    "pdfminer-six==20251230",
+]
+
 [tool.uv.workspace]
 members = ["packages/*", "."]
 
@@ -55,8 +65,6 @@ rosetta-ingest       = { workspace = true }
 rosetta-meta         = { workspace = true }
 rosetta-classify     = { workspace = true }
 rosetta-registers    = { workspace = true }
-rosetta-mnemonics    = { workspace = true }
-rosetta-opcode-map   = { workspace = true }
 rosetta-instructions = { workspace = true }
 rosetta-pcode        = { workspace = true }
 rosetta-generate-sla = { workspace = true }
