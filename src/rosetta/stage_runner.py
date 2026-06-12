@@ -34,14 +34,6 @@ def _import_classify():
     from rosetta_classify.node import classify_node
     return classify_node
 
-def _import_opcode_map():
-    from rosetta_opcode_map.node import opcode_map_node
-    return opcode_map_node
-
-def _import_opcode_map_pcode():
-    from rosetta_opcode_map.pcode_node import opcode_map_pcode_node
-    return opcode_map_pcode_node
-
 def _import_registers():
     from rosetta_registers.node import registers_node
     return registers_node
@@ -74,9 +66,6 @@ STAGE_REGISTRY: dict[str, tuple[Callable, list[str]]] = {
     "generate":     (_import_generate,     ["meta", "processor_name", "out_dir"]),
     "validate":     (_import_validate,     ["lang_dir", "ghidra_home"]),
     "evaluate":     (_import_evaluate,     ["lang_dir", "reference_slaspec"]),
-    # ── Legacy CISC stages (kept until opcode_table is folded into decode) ────
-    "opcode_map":       (_import_opcode_map,       ["meta", "db_path"]),
-    "opcode_map_pcode": (_import_opcode_map_pcode, ["opcode_map", "meta"]),
 }
 
 # The canonical order for `run-stage all`
@@ -137,7 +126,6 @@ def _find_producer(key: str) -> str | None:
     _produces: dict[str, str] = {
         "meta": "meta",
         "registers": "registers",
-        "opcode_map": "opcode_map",
         "instructions": "decode",
         "lang_dir": "decode",
         "ghidra_home": "initial state (pass --checkpoint with ghidra_home set)",
@@ -181,26 +169,6 @@ def summarize_and_warn(stage: str, state: dict[str, Any]) -> None:
         else:
             log.info("classify: encoding_style=%r", style)
 
-    elif stage == "opcode_map":
-        om = state.get("opcode_map") or []
-        mn = state.get("mnemonics") or []
-        if not om:
-            meta = state.get("meta") or {}
-            if meta.get("encoding_style") == "opcode_table":
-                log.warning("opcode_map: empty — extraction failed for opcode_table ISA")
-            else:
-                log.info("opcode_map: skipped (encoding_style=%r)", meta.get("encoding_style"))
-        else:
-            log.info("opcode_map: %d entries, %d unique mnemonics", len(om), len(mn))
-
-    elif stage == "opcode_map_pcode":
-        om = state.get("opcode_map") or []
-        with_pcode = sum(1 for e in om if e.get("pcode_body"))
-        if with_pcode == 0:
-            log.warning("opcode_map_pcode: no entries received pcode_body")
-        else:
-            log.info("opcode_map_pcode: %d / %d entries have pcode_body", with_pcode, len(om))
-
     elif stage == "registers":
         regs = state.get("registers") or []
         if not regs:
@@ -210,9 +178,12 @@ def summarize_and_warn(stage: str, state: dict[str, Any]) -> None:
 
     elif stage == "decode":
         instrs = state.get("instructions") or []
+        opcode_map = state.get("opcode_map") or []
         lang_dir = state.get("lang_dir")
         if not lang_dir:
             log.warning("decode: lang_dir not set — writer may have failed")
+        elif opcode_map:
+            log.info("decode: %d opcode-table entries written, lang_dir=%s", len(opcode_map), lang_dir)
         else:
             log.info("decode: %d instructions written, lang_dir=%s", len(instrs), lang_dir)
 

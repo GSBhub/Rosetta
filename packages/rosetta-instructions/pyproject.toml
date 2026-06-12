@@ -7,7 +7,6 @@ dependencies = [
     "rosetta-utils",
     "rosetta-pcode",
     "rosetta-generate-sla",
-    "rosetta-opcode-map",
     "langgraph",
     "docquery @ git+https://github.com/gsbhub/docquery",
 ]
@@ -27,7 +26,6 @@ rosetta-schemas = { workspace = true }
 rosetta-utils = { workspace = true }
 rosetta-pcode = { workspace = true }
 rosetta-generate-sla = { workspace = true }
-rosetta-opcode-map = { workspace = true }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

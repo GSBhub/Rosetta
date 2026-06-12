@@ -252,8 +252,9 @@ def test_build_initial_state_omits_source_when_none():
 # ---------------------------------------------------------------------------
 
 def test_stage_order_covers_all_pipeline_nodes():
-    # The new happy-path order: mnemonics/opcode_map/pcode are legacy stages
-    # kept for standalone debugging but removed from STAGE_ORDER.
+    # Happy-path order. The old batch/CISC stages (mnemonics/opcode_map/
+    # opcode_map_pcode/instructions/pcode) have been removed entirely; CISC is
+    # now handled inside `decode` via encoding_style dispatch.
     expected = [
         "ingest", "meta", "classify", "registers",
         "decode", "generate", "validate", "evaluate",
