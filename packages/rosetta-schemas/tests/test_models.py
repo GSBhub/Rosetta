@@ -92,7 +92,7 @@ def test_isa_spec_roundtrip():
 # ---------------------------------------------------------------------------
 
 def _make_state(**kwargs) -> PipelineState:
-    base: PipelineState = {"errors": [], "registers": [], "mnemonics": [], "instructions": []}
+    base: PipelineState = {"errors": [], "registers": [], "instructions": []}
     base.update(kwargs)
     return base
 

@@ -18,7 +18,7 @@ from typing import Any
 _SAFE_STATE_KEYS = {
     "db_path", "processor_name", "out_dir", "source_path",
     "encoding_style", "output_format", "max_iterations", "max_instructions",
-    "resume", "stop_after", "filter_mnemonics",
+    "resume",
     "lang_dir", "compile_ok", "instruction_coverage", "register_overlap",
 }
 

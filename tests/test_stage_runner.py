@@ -204,7 +204,6 @@ def test_build_initial_state_singleton_concurrency():
         source_path=None,
         inter_chunk_sleep=2.0,
         max_instructions=None,
-        max_pcode=None,
         memory_warn_gb=2.0,
     )
     assert state["max_concurrent"] == 1
@@ -218,7 +217,7 @@ def test_build_initial_state_sets_ghidra_home():
         settings_dict={}, ghidra_home="/tools/ghidra",
         reference_slaspec=None, source_path=None,
         inter_chunk_sleep=0.0, max_instructions=None,
-        max_pcode=None, memory_warn_gb=2.0,
+        memory_warn_gb=2.0,
     )
     assert state["ghidra_home"] == "/tools/ghidra"
 
@@ -230,7 +229,7 @@ def test_build_initial_state_includes_reference_and_source():
         reference_slaspec="/ref/ARM6_le.slaspec",
         source_path="/manuals/arm.pdf",
         inter_chunk_sleep=0.0, max_instructions=None,
-        max_pcode=None, memory_warn_gb=2.0,
+        memory_warn_gb=2.0,
     )
     assert state["reference_slaspec"] == "/ref/ARM6_le.slaspec"
     assert state["source_path"] == "/manuals/arm.pdf"
@@ -242,7 +241,7 @@ def test_build_initial_state_omits_source_when_none():
         settings_dict={}, ghidra_home="/g",
         reference_slaspec=None, source_path=None,
         inter_chunk_sleep=0.0, max_instructions=None,
-        max_pcode=None, memory_warn_gb=2.0,
+        memory_warn_gb=2.0,
     )
     assert "source_path" not in state
 
@@ -280,6 +279,6 @@ def test_summarize_evaluate_does_not_raise():
     summarize_and_warn("evaluate", state)  # should not raise
 
 
-def test_summarize_empty_instructions_does_not_raise():
-    state = {"instructions": [], "mnemonics": ["ADD"], "errors": []}
-    summarize_and_warn("instructions", state)
+def test_summarize_decode_does_not_raise():
+    state = {"instructions": [], "opcode_map": [], "lang_dir": "/out/languages", "errors": []}
+    summarize_and_warn("decode", state)  # should not raise

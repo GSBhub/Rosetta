@@ -243,7 +243,6 @@ def build_initial_state(
     source_path: str | None,
     inter_chunk_sleep: float,
     max_instructions: int | None,
-    max_pcode: int | None,
     memory_warn_gb: float,
     output_format: str = "sla",
     max_iterations: int | None = None,
@@ -264,10 +263,7 @@ def build_initial_state(
         "inter_chunk_sleep": inter_chunk_sleep,
         "memory_warn_gb": memory_warn_gb,
         "max_instructions": max_instructions,
-        "max_pcode": max_pcode,
         "resume": False,
-        "stop_after": None,
-        "filter_mnemonics": None,
         "errors": [],
     }
     if source_path:
