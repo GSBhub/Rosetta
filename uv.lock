@@ -680,7 +680,7 @@ wheels = [
 [[package]]
 name = "docquery"
 version = "0.1.0"
-source = { git = "https://github.com/gsbhub/docquery#77572a3bae0da2fcd2b71b8b045e6c8fbfc2f7bd" }
+source = { git = "https://github.com/gsbhub/docquery#3e9f2158dbae1bd52569d3d3be8d8956fc2a9c35" }
 dependencies = [
     { name = "chromadb" },
     { name = "langchain" },
