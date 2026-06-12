@@ -91,12 +91,54 @@ def decode_node(state: PipelineState) -> dict[str, Any]:
         log.exception("decode_node: writer.open failed")
         return {"instructions": [], "opcode_map": [], "lang_dir": None, "errors": [f"decode_node writer.open: {exc}"]}
 
+    max_iterations: int | None = state.get("max_iterations")
+
     # ------------------------------------------------------------------
-    # 5. Build and run decode subgraph
+    # 5. Dispatch a decode strategy on the ISA family (set by `classify`)
+    # ------------------------------------------------------------------
+    # opcode_table (CISC: 6502/Z80/M7700) walks the bounded opcode space; the
+    # RISC/variable strategies walk a mnemonic cursor. The writer was opened
+    # with meta, so it already knows whether to render the CISC template.
+    if meta.encoding_style == "opcode_table":
+        from rosetta_instructions.opcode_decode import run_opcode_scan
+
+        try:
+            opcode_map, scan_errors = run_opcode_scan(
+                writer, settings, meta,
+                max_iterations=max_iterations,
+                inter_chunk_sleep=state.get("inter_chunk_sleep", 0.0),
+            )
+        except Exception as exc:
+            log.exception("decode_node: opcode scan failed")
+            scan_errors = [f"decode_node opcode scan: {exc}"]
+            opcode_map = []
+        try:
+            writer.close()
+        except Exception as exc:
+            log.warning("decode_node: writer.close() error: %s", exc)
+        log.info("decode_node: opcode_table scan wrote %d entries, lang_dir=%s",
+                 len(opcode_map), writer.lang_dir)
+        return {
+            "instructions": [],
+            "opcode_map": opcode_map,
+            "lang_dir": str(writer.lang_dir) if writer.lang_dir else None,
+            "errors": errors + scan_errors,
+        }
+
+    if meta.encoding_style == "variable_prefix":
+        # x86-style multi-byte prefixes aren't modelled yet; the mnemonic cursor
+        # still recovers the documented instruction set, just without per-prefix
+        # opcode tables. Surface that limitation rather than failing silently.
+        errors.append(
+            "decode_node: variable_prefix (x86-style) prefix decoding not implemented — "
+            "falling back to the mnemonic strategy"
+        )
+
+    # ------------------------------------------------------------------
+    # 5b. Mnemonic-cursor strategy (fixed_word RISC, and variable_prefix fallback)
     # ------------------------------------------------------------------
     from rosetta_instructions.decode_graph import DecodeState, build_decode_graph
 
-    max_iterations: int | None = state.get("max_iterations")
     debug_save_dir = state.get("debug_save_dir")
     debug_path: Path | None = Path(debug_save_dir) / "decode_partial.jsonl" if debug_save_dir else None
     if debug_path and not state.get("resume"):

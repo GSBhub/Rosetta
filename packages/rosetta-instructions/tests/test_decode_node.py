@@ -184,21 +184,51 @@ def test_decode_node_output_format_forwarded(tmp_path):
     assert captured["fmt"] == "sleigh"
 
 
-def test_decode_node_cisc_encoding_style(tmp_path):
-    """CISC meta should still flow through decode_node (cisc_parse handles it internally)."""
+_PATCH_OPCODE = "rosetta_instructions.opcode_decode.run_opcode_scan"
+
+
+def test_decode_node_opcode_table_dispatches_to_opcode_scan(tmp_path):
+    """opcode_table family routes to the opcode strategy, not the mnemonic graph."""
     lang_dir = tmp_path / "TestISA" / "data" / "languages"
     lang_dir.mkdir(parents=True)
 
     fake_writer = MagicMock()
     fake_writer.lang_dir = lang_dir
+    rows = [{"opcode": 0, "mnemonic": "LDA", "mode": "imm", "operand_bytes": 1}]
 
     state = _state(tmp_path, meta=_meta("opcode_table").model_dump())
 
     with (
         patch(_PATCH_CHROMA),
         patch(_PATCH_WRITER, return_value=fake_writer),
-        patch(_PATCH_GRAPH, side_effect=_make_fake_graph([], lang_dir)),
+        patch(_PATCH_OPCODE, return_value=(rows, [])) as scan,
+        patch(_PATCH_GRAPH, side_effect=AssertionError("mnemonic graph must not run for CISC")),
     ):
         result = decode_node(state)
 
+    scan.assert_called_once()
+    assert result["opcode_map"] == rows
     assert result["errors"] == []
+    assert result["lang_dir"] == str(lang_dir)
+    fake_writer.close.assert_called_once()
+
+
+def test_decode_node_variable_prefix_falls_back_to_mnemonic(tmp_path):
+    """variable_prefix (x86) has no opcode-table strategy yet → mnemonic graph + a caveat."""
+    lang_dir = tmp_path / "TestISA" / "data" / "languages"
+    lang_dir.mkdir(parents=True)
+
+    fake_writer = MagicMock()
+    fake_writer.lang_dir = lang_dir
+
+    state = _state(tmp_path, meta=_meta("variable_prefix").model_dump())
+
+    with (
+        patch(_PATCH_CHROMA),
+        patch(_PATCH_WRITER, return_value=fake_writer),
+        patch(_PATCH_GRAPH, side_effect=_make_fake_graph(["MOV"], lang_dir)),
+    ):
+        result = decode_node(state)
+
+    assert result["lang_dir"] == str(lang_dir)
+    assert any("variable_prefix" in e for e in result["errors"])
