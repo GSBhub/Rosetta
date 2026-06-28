@@ -12,8 +12,10 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 from rosetta_schemas.models import ISASpec
 
 from rosetta_generate_sla.sla.sanitize import (
+    dedup_registers,
     find_register,
     normalize_instruction,
+    render_pcode_body,
     sanitize_pcode,
 )
 
@@ -34,6 +36,7 @@ class ModuleGenerator:
             lstrip_blocks=True,
         )
         self._env.filters["sanitize_pcode"] = sanitize_pcode
+        self._env.filters["render_pcode"] = render_pcode_body
 
     def generate(self, spec: ISASpec, processor_name: str, out_dir: Path) -> Path:
         """Render all four processor module files into <out_dir>/<processor_name>/data/languages/.
@@ -43,8 +46,10 @@ class ModuleGenerator:
         lang_dir = out_dir / processor_name / "data" / "languages"
         lang_dir.mkdir(parents=True, exist_ok=True)
 
-        pc = find_register(spec.registers, "PC", "IP", "EIP", "RIP", description_keyword="program counter")
-        sp = find_register(spec.registers, "SP", "ESP", "RSP", description_keyword="stack pointer")
+        registers = dedup_registers(spec.registers)
+
+        pc = find_register(registers, "PC", "IP", "EIP", "RIP", description_keyword="program counter")
+        sp = find_register(registers, "SP", "ESP", "RSP", description_keyword="stack pointer")
 
         normalized_instructions = [normalize_instruction(i) for i in spec.instructions]
 
@@ -92,7 +97,7 @@ class ModuleGenerator:
 
         ctx = {
             "meta": meta,
-            "registers": spec.registers,
+            "registers": registers,
             "instructions": normalized_instructions,
             "opcode_map": spec.opcode_map,
             "processor_name": processor_name,
@@ -150,8 +155,30 @@ class ModuleGenerator:
             log.info("append_to_slaspec: no new instructions for %s", slaspec_path.name)
             return 0
 
+        # Each constructor needs a distinct opcode pattern, or SLEIGH reports them
+        # as conflicting (epsilon constructors all match the empty pattern). We have
+        # no decoded encodings, so assign each a unique stub-token value, continuing
+        # from however many constructors the file already holds.
+        stub_base = len(re.findall(r"^:\S", existing_text, re.MULTILINE))
+
+        # The header (written once, up front) defines op{w}stub tokens only for the
+        # widths it knew then (meta.instruction_sizes_bits). In streaming mode a later
+        # instruction may carry a width the header never declared — referencing an
+        # undefined op{w}stub fails to compile ("unknown family or operand"). Snap each
+        # new instruction's stub width to a header-defined one so the family exists.
+        defined_widths = [int(w) for w in re.findall(r"op(\d+)stub\s*=\s*\(", existing_text)]
+        defined_set = set(defined_widths)
+        primary_width = defined_widths[0] if defined_widths else 32
+        normalized = [normalize_instruction(i) for i in new_instrs]
+        for ni in normalized:
+            if ni.encoding_bits not in defined_set:
+                ni.encoding_bits = primary_width
+
         tmpl = self._env.get_template("constructor_block.j2")
-        rendered = tmpl.render(instructions=[normalize_instruction(i) for i in new_instrs])
+        rendered = tmpl.render(
+            instructions=normalized,
+            stub_base=stub_base,
+        )
         separator = f"\n# --- appended by rosetta ({len(new_instrs)} instruction(s)) ---\n"
         slaspec_path.write_text(existing_text.rstrip() + "\n" + separator + rendered)
         log.info("Appended %d constructor(s) to %s", len(new_instrs), slaspec_path)

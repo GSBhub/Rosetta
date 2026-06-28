@@ -25,7 +25,12 @@ _SINGLE_INT = re.compile(r'^\d+$')
 
 
 def sanitize_pcode(hint: str) -> str:
-    """Return hint if it looks like valid SLEIGH P-code, else a safe stub."""
+    """Return hint if it looks like valid SLEIGH P-code, else a safe stub.
+
+    Used as a *predicate* by the decode validator: a return value equal to the
+    input means the hint looked acceptable. For rendering a guaranteed-compilable
+    constructor body, use :func:`render_pcode_body` instead.
+    """
     s = hint.strip() if hint else ""
     if not s:
         return "local tmp:4 = 0;"
@@ -34,6 +39,41 @@ def sanitize_pcode(hint: str) -> str:
     if _BAD_PCODE.search(s):
         return f"# {s[:80]}\n    local tmp:4 = 0;"
     return s
+
+
+def render_pcode_body(hint: str) -> str:
+    """Return a guaranteed-compilable SLEIGH semantic body for *hint*.
+
+    The extracted ``pcode_hint`` is LLM-authored prose that almost always
+    references identifiers (``rd``, ``ra``, ``rb`` …) not declared as registers
+    or operands in this constructor — emitting it verbatim produces "undefined
+    symbol" errors, and partial fragments produce parse errors. So we never treat
+    the hint as executable code: it is preserved as a single-line comment and the
+    body is a no-op that references nothing undefined, so the constructor always
+    compiles. P-code fidelity is a separate concern requiring decoded operands.
+    """
+    s = " ".join((hint or "").split())  # collapse newlines/runs of whitespace
+    if not s:
+        return "local tmp:4 = 0;"
+    return f"# {s[:120]}\n    local tmp:4 = 0;"
+
+
+def dedup_registers(registers: list[RegisterDef]) -> list[RegisterDef]:
+    """Drop duplicate register names (case-insensitive), keeping first occurrence.
+
+    Extraction frequently emits the same register twice (e.g. ``R15`` as both PC
+    and a banked alias). SLEIGH rejects duplicate symbol names in a ``define
+    register`` block, so we keep only the first definition of each name.
+    """
+    seen: set[str] = set()
+    result: list[RegisterDef] = []
+    for reg in registers:
+        key = reg.name.upper()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(reg)
+    return result
 
 
 def normalize_bit_fields(bit_fields: dict[str, str]) -> dict[str, str]:

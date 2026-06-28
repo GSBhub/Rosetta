@@ -139,3 +139,75 @@ def test_close_sets_lang_dir(tmp_path):
     w.open(meta=_meta(), registers=_registers(), processor_name="TestISA", out_dir=tmp_path)
     w.close()
     assert w.lang_dir is not None
+
+
+# ---------------------------------------------------------------------------
+# Compile-safety regressions (output must be valid SLEIGH, not just present)
+# ---------------------------------------------------------------------------
+
+def test_register_block_has_no_duplicate_names(tmp_path):
+    """Extraction emits dup register names; the slaspec must not (SLEIGH rejects them)."""
+    regs = [
+        RegisterDef(name="R15", size_bits=32, aliases=["PC"], description="pc"),
+        RegisterDef(name="R15", size_bits=32, description="dup pc"),  # duplicate
+        RegisterDef(name="r15", size_bits=32, description="case-dup"),  # case-insensitive dup
+        RegisterDef(name="SP", size_bits=32, description="sp"),
+    ]
+    w = SlaInstructionWriter()
+    w.open(meta=_meta(), registers=regs, processor_name="TestISA", out_dir=tmp_path)
+    slaspec = (w.lang_dir / "TestISA.slaspec").read_text()
+    block = re.search(r"define register[^\[]*\[([^\]]+)\]", slaspec, re.DOTALL).group(1)
+    names = re.findall(r"[A-Za-z]\w*", block)
+    assert len(names) == len({n.upper() for n in names}), f"duplicate register names: {names}"
+    assert sorted({n.upper() for n in names}) == ["R15", "SP"]
+
+
+def test_constructors_get_unique_patterns_not_epsilon(tmp_path):
+    """Every constructor needs a distinct opcode pattern; all-epsilon would conflict."""
+    w = SlaInstructionWriter()
+    w.open(meta=_meta(), registers=_registers(), processor_name="TestISA", out_dir=tmp_path)
+    for mnem in ("ADD", "SUB", "MOV", "ORR"):
+        w.write_instruction(_instr(mnem))
+    slaspec = (w.lang_dir / "TestISA.slaspec").read_text()
+
+    assert "is epsilon" not in slaspec
+    patterns = re.findall(r"^:\w+ is (op32stub=\d+)", slaspec, re.MULTILINE)
+    assert len(patterns) == 4
+    assert len(set(patterns)) == 4, f"opcode patterns not unique: {patterns}"
+
+
+def test_streamed_instruction_of_undeclared_width_snaps_to_header_token(tmp_path):
+    """A later instruction whose width the header never declared must not emit an
+    undefined op{w}stub. In streaming mode the header is written once up front from
+    meta.instruction_sizes_bits ([32] here); an instruction arriving with
+    encoding_bits=16 would otherwise reference op16stub and fail to compile
+    ('unknown family or operand'). It must snap to the header's op32stub."""
+    w = SlaInstructionWriter()
+    w.open(meta=_meta(), registers=_registers(), processor_name="TestISA", out_dir=tmp_path)
+    w.write_instruction(_instr("ADD"))  # 32-bit, declared
+    narrow = InstructionDef(mnemonic="AESE", encoding_bits=16, semantics="narrow")
+    w.write_instruction(narrow)
+    slaspec = (w.lang_dir / "TestISA.slaspec").read_text()
+
+    # Only the header-declared stub token is referenced; the 16-bit one was snapped.
+    assert "op16stub" not in slaspec
+    stub_refs = re.findall(r"^:\w+ is (op\d+stub)=\d+", slaspec, re.MULTILINE)
+    assert set(stub_refs) == {"op32stub"}
+    # Stub indices stay globally unique across the snap.
+    values = re.findall(r"op32stub=(\d+)", slaspec)
+    assert len(values) == len(set(values))
+
+
+def test_pcode_body_never_emits_hallucinated_identifiers(tmp_path):
+    """Hint referencing undefined regs (rd/ra/rb) must become a comment + safe no-op."""
+    w = SlaInstructionWriter()
+    w.open(meta=_meta(), registers=_registers(), processor_name="TestISA", out_dir=tmp_path)
+    w.write_instruction(_instr("ADD", pcode="rd = ra + rb;"))
+    slaspec = (w.lang_dir / "TestISA.slaspec").read_text()
+
+    body = re.search(r":ADD is[^\n]*\n\{\n(.*?)\n\}", slaspec, re.DOTALL).group(1)
+    assert "rd = ra + rb" in body and "# rd = ra + rb" in body  # preserved as comment
+    assert "local tmp:4 = 0;" in body                            # safe no-op statement
+    # no executable (uncommented) line references the hallucinated identifiers
+    code_lines = [l.strip() for l in body.splitlines() if l.strip() and not l.strip().startswith("#")]
+    assert all("ra" not in l and "rd" not in l for l in code_lines)

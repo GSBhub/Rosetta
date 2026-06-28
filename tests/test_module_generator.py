@@ -70,6 +70,44 @@ def test_cspec_contains_stack_pointer(tmp_path, minimal_spec):
     assert "SP" in text
 
 
+def test_cspec_declares_ram_global(tmp_path, minimal_spec):
+    """The decompiler refuses to run ('ram may not be a global space') unless the
+    cspec declares the ram space global. SLEIGH compile + disassembly don't need
+    this, so only headless decompilation catches its absence — keep it covered."""
+    gen = ModuleGenerator()
+    lang_dir = gen.generate(minimal_spec, "TestISA", tmp_path)
+    text = (lang_dir / "TestISA.cspec").read_text()
+    assert "<global>" in text
+    assert '<range space="ram"/>' in text
+
+
+def test_cspec_pentry_maxsize_never_exceeds_register_size(tmp_path):
+    """Ghidra refuses to load the language ('<pentry> maxsize is bigger than memory
+    range') if a pentry's maxsize exceeds its register's actual width. With a 16-bit
+    word but sub-word registers (e.g. M7700's 1-byte PG/DT), maxsize must cap to the
+    register size, not word_size//8. Caught only at language load, not SLEIGH compile."""
+    from rosetta_schemas.models import ISAMeta, ISASpec, InstructionDef, RegisterDef
+    spec = ISASpec(
+        meta=ISAMeta(name="Narrow", endian="little", word_size_bits=16, alignment=1,
+                     instruction_sizes_bits=[8, 16]),
+        registers=[
+            RegisterDef(name="PC", size_bits=16, description="pc"),
+            RegisterDef(name="PG", size_bits=8, description="program bank"),  # 1 byte < word
+            RegisterDef(name="DT", size_bits=8, description="data bank"),     # 1 byte < word
+            RegisterDef(name="DP", size_bits=16, description="direct page"),
+        ],
+        instructions=[InstructionDef(mnemonic="NOP", semantics="nop", encoding_bits=8, pcode_hint="# nop")],
+    )
+    lang_dir = ModuleGenerator().generate(spec, "Narrow", tmp_path)
+    text = (lang_dir / "Narrow.cspec").read_text()
+    # No pentry may claim a maxsize larger than 1 byte for the 1-byte registers.
+    pentries = re.findall(r'<pentry minsize="\d+" maxsize="(\d+)">\s*<register name="(\w+)"/>', text)
+    sizes = {"PC": 2, "PG": 1, "DT": 1, "DP": 2}
+    for maxsize, reg in pentries:
+        assert int(maxsize) <= sizes[reg], f"{reg} pentry maxsize {maxsize} > its {sizes[reg]}-byte size"
+    assert ("1", "PG") in pentries and ("1", "DT") in pentries  # the sub-word ones were capped
+
+
 def test_output_directory_structure(tmp_path, minimal_spec):
     gen = ModuleGenerator()
     lang_dir = gen.generate(minimal_spec, "TestISA", tmp_path)
