@@ -79,20 +79,34 @@ def cli() -> None:
          "all .c, .h, .py, .cpp, .hpp files are loaded as text chunks.")
 @click.option("--embed-model", default=None, help="Override EMBED_MODEL env var")
 @click.option("--embed-base-url", default=None, help="Override EMBED_BASE_URL env var")
-def ingest(manual: str, db: str, source: bool, embed_model: str | None, embed_base_url: str | None) -> None:
+@click.option("--instruction-pattern", default=None, metavar="REGEX",
+              help="Per-ISA regex whose capture group is an instruction mnemonic "
+                   "in the manual's headings/opcode tables (searched multiline). "
+                   "Tags instructions so pass-3 discovery and pass-4 encodings are "
+                   "grounded instead of LLM-guessed. "
+                   r"E.g. ARM: 'A7\.7\.\d+\s*\n\s*([A-Z][A-Z0-9]*)'.")
+def ingest(manual: str, db: str, source: bool, embed_model: str | None,
+           embed_base_url: str | None, instruction_pattern: str | None) -> None:
     """Ingest a PDF manual (or source code directory) into a docquery RAG database.
 
     Run multiple times against the same --db to supplement an existing database
     with additional manuals — content is deduplicated by hash so there are no
     duplicate chunks.  Use this when pass 3 mnemonic discovery reports low
     coverage and the primary manual does not document all instructions.
+
+    Pass --instruction-pattern to tag every instruction the manual defines: the
+    mnemonic list and per-instruction bit fields are then read from the
+    document's structure deterministically, eliminating the LLM hallucinations
+    of mnemonic discovery and encoding extraction.
     """
     import docquery
-    from docquery.config import Settings
+    from docquery.config import EntityRule, Settings
 
     _apply_model_overrides(None, None, embed_model, embed_base_url)
     settings = Settings()
     settings.db_path = db
+    if instruction_pattern:
+        settings.entity_rules = [EntityRule(name="instruction", pattern=instruction_pattern)]
 
     src = Path(manual)
     if source:

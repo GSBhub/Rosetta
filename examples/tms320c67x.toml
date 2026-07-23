@@ -1,0 +1,15 @@
+# TMS320C67x DSP ISA — grounded ingest + SLEIGH generation.
+#
+# Data only: consumed generically by the CLI; no TMS320 logic lives in src/.
+name = "TMS320C67x"
+manual = "manuals/tms320c67x.pdf"
+db = "dbs/tms320c67x"
+
+# Each instruction description page has a "Syntax <MNEMONIC> (.unit) ..." line
+# (SPRU733A, chapter 3). Capturing the mnemonic there tags ~108 instructions
+# deterministically. A few non-instruction matches (e.g. EXAMPLE) are dropped
+# by grounded discovery's mnemonic cleaning.
+instruction_pattern = 'Syntax\s+([A-Z][A-Z0-9]*)'
+
+# No stock Ghidra reference spec for C67x; leave unset (evaluate is optional).
+# reference = ""

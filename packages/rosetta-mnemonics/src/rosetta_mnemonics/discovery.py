@@ -151,6 +151,21 @@ def _clean_mnemonic(raw: str) -> str:
     return ""
 
 
+def _grounded_mnemonics(settings: Any) -> list[str]:
+    """Distinct uppercase mnemonics from the 'instruction' entity tags, or []."""
+    try:
+        from docquery._enumerate import enumerate_entities
+    except Exception as exc:  # pragma: no cover - docquery internal moved
+        log.warning("grounded enumeration unavailable (%s)", exc)
+        return []
+    vs = getattr(settings, "vs", None)
+    if vs is None:
+        return []
+    names = {it.name.strip().upper() for it in enumerate_entities(vs, "instruction")
+             if _clean_mnemonic(it.name)}
+    return sorted(n for n in names if n)
+
+
 def discover_mnemonics(
     db_path: str,
     settings: Any,
@@ -161,6 +176,18 @@ def discover_mnemonics(
     # settings.vs must already be set by the caller (mnemonics_node sets it via
     # get_chroma_wrapper before calling here). Do NOT call _build_chroma — that
     # overwrites settings.vs with the old SQLite-backed chroma and hangs.
+
+    # Grounded enumeration: when the manual was ingested with an instruction
+    # entity rule, the mnemonic list is deterministic and complete — the
+    # document's structural tags, not the LLM. This eliminates both the
+    # coverage gap and the hallucinations of the multi-strategy RAG loop, which
+    # remains only as a fallback for stores with no instruction entities.
+    grounded = _grounded_mnemonics(settings)
+    if grounded:
+        log.info("Grounded instruction enumeration: %d mnemonics (no LLM)", len(grounded))
+        return grounded
+    log.info("No grounded instruction entities tagged; "
+             "falling back to multi-strategy LLM discovery")
 
     graph = StateGraph(_MnemonicState)
     graph.add_node("count", _count_node)

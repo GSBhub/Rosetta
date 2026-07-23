@@ -1,0 +1,15 @@
+# ARMv7-M ISA — grounded ingest + SLEIGH generation.
+#
+# Data only: the instruction_pattern is consumed generically by
+# `rosetta ingest --instruction-pattern`; no ARM logic lives in src/.
+name = "ARMv7M"
+manual = "manuals/armv7m.pdf"
+db = "dbs/armv7m"
+
+# Section headings in the ARM ARM look like "A7.7.12\nADC" — capture the
+# mnemonic on the line after the "A7.7.<n>" instruction-reference heading so
+# pass-3 discovery and pass-4 encodings are grounded, not LLM-guessed.
+instruction_pattern = 'A7\.7\.\d+\s*\n\s*([A-Z][A-Z0-9]*)'
+
+# Ghidra language ID for optional `rosetta evaluate`.
+reference = "ARM:LE:32:v7"
