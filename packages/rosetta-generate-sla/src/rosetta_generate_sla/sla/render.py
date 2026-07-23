@@ -120,8 +120,26 @@ def build_attach_stmts(
         if not names or sym in seen:
             continue
         seen.add(sym)
-        stmts.append({"sym": sym, "names": [str(n) for n in names]})
+        stmts.append({"sym": sym, "names": _fmt_attach_names(names)})
     return stmts
+
+
+def _fmt_attach_names(names: list[str]) -> str:
+    """Format an `attach names` value list: `_` stays bare, everything else is
+    a quoted display string (SLEIGH rejects bare numbers/punctuation).
+
+    Values come from a per-ISA config, so escape the quote and backslash that
+    would otherwise terminate the string and produce an unparseable statement.
+    """
+    out = []
+    for n in names:
+        s = str(n)
+        if s == "_":
+            out.append(s)
+        else:
+            escaped = s.replace("\\", "\\\\").replace('"', '\\"')
+            out.append(f'"{escaped}"')
+    return " ".join(out)
 
 
 def build_render_instructions(

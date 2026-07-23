@@ -21,6 +21,7 @@ from rosetta_generate_sla.sla.sanitize import (
     find_register,
     normalize_instruction,
     sanitize_pcode,
+    sanitize_register,
 )
 
 log = logging.getLogger(__name__)
@@ -49,8 +50,9 @@ class ModuleGenerator:
         lang_dir = out_dir / processor_name / "data" / "languages"
         lang_dir.mkdir(parents=True, exist_ok=True)
 
-        pc = find_register(spec.registers, "PC", "IP", "EIP", "RIP", description_keyword="program counter")
-        sp = find_register(spec.registers, "SP", "ESP", "RSP", description_keyword="stack pointer")
+        registers = [sanitize_register(r) for r in spec.registers]
+        pc = find_register(registers, "PC", "IP", "EIP", "RIP", description_keyword="program counter")
+        sp = find_register(registers, "SP", "ESP", "RSP", description_keyword="stack pointer")
 
         normalized_instructions = [normalize_instruction(i) for i in spec.instructions]
 
@@ -119,7 +121,7 @@ class ModuleGenerator:
 
         ctx = {
             "meta": meta,
-            "registers": spec.registers,
+            "registers": registers,
             "instructions": normalized_instructions,
             "tokens": tokens,
             "attach_stmts": build_attach_stmts(normalized_instructions, meta, symbols),

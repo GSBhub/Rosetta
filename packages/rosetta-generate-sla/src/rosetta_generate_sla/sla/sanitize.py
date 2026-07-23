@@ -22,6 +22,30 @@ _BAD_PCODE = re.compile(
 _VALID_IDENT = re.compile(r'^[A-Za-z_]\w*$')
 _PURE_BINARY = re.compile(r'^[01]+$')
 _SINGLE_INT = re.compile(r'^\d+$')
+_IDENT_BAD = re.compile(r'[^A-Za-z0-9_]')
+
+
+def sanitize_ident(name: str) -> str:
+    """Coerce a name into a valid SLEIGH identifier ([A-Za-z_]\\w*).
+
+    Register/field names lifted from a manual can contain spaces or punctuation
+    (e.g. 'CPU ID'); the SLEIGH compiler rejects those, so runs of invalid
+    characters collapse to '_' and a leading digit is prefixed with '_'.
+    """
+    s = _IDENT_BAD.sub("_", name.strip())
+    if not s:
+        return "_"
+    if s[0].isdigit():
+        s = "_" + s
+    return s
+
+
+def sanitize_register(reg: "RegisterDef") -> "RegisterDef":
+    """Copy of *reg* with name and aliases coerced to valid SLEIGH identifiers."""
+    r = copy.copy(reg)
+    r.name = sanitize_ident(reg.name)
+    r.aliases = [sanitize_ident(a) for a in reg.aliases]
+    return r
 
 
 def sanitize_pcode(hint: str) -> str:

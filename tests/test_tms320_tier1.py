@@ -96,7 +96,7 @@ def test_build_attach_stmts_width_suffixed():
     instrs = _tms_spec().instructions
     symbols = build_field_symbols(instrs)
     stmts = build_attach_stmts(instrs, meta, symbols)
-    assert stmts == [{"sym": "s32", "names": ["1", "2"]}]
+    assert stmts == [{"sym": "s32", "names": '"1" "2"'}]
 
 
 def test_render_predication_unit_and_pbit():
@@ -141,7 +141,7 @@ def test_generate_multi_language_and_attach():
     # one <language> per family
     for fam in ("C62x", "C64x", "C67x"):
         assert f":32:{fam}" in ldefs
-    assert "attach names [ s32 ] [ 1 2 ];" in slaspec
+    assert 'attach names [ s32 ] [ "1" "2" ];' in slaspec
     # grounded constructor: mnemonic-first with bound predication/side/p
     assert ":ABSDP creg32 z32 s32 is" in slaspec
     assert "op_11_232=0b1011001000" in slaspec
