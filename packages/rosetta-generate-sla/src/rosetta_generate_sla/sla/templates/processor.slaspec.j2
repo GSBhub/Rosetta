@@ -38,23 +38,16 @@ define token instr{{ width }}({{ width }})
 
 {% endfor %}
 
-# Instruction constructors
-{% set instr_ns = namespace(stub_id=0) %}
-{% for instr in instructions %}
-# {{ instr.mnemonic }}: {{ instr.semantics | truncate(80) }}
-{% set display = instr.mnemonic %}
-{% if instr.operands %}
-{% set display = display + ' ' + (instr.operands | join(', ')) %}
-{% endif %}
-{% if instr.bit_constraints %}
-:{{ display }} is {% for field, val in instr.bit_constraints.items() %}{{ field }}{{ instr.encoding_bits }}=0b{{ val }}{% if not loop.last %} & {% endif %}{% endfor %}
+# Attached operand fields (register side, condition register, functional unit, …)
+{% for a in attach_stmts %}
+attach names [ {{ a.sym }} ] [ {{ a.names | join(' ') }} ];
+{% endfor %}
 
-{% else %}
-:{{ display }} is op{{ instr.encoding_bits }}stub={{ instr_ns.stub_id }}
-{% set instr_ns.stub_id = instr_ns.stub_id + 1 %}
-{% endif %}
+# Instruction constructors
+{% for ri in render_instructions %}
+:{{ ri.display }} is {{ ri.pattern }}
 {
-    {{ instr.pcode_hint | sanitize_pcode }}
+    {{ ri.pcode_hint | sanitize_pcode }}
 }
 
 {% endfor %}

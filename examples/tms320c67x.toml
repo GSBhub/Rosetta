@@ -13,3 +13,54 @@ instruction_pattern = 'Syntax\s+([A-Z][A-Z0-9]*)'
 
 # No stock Ghidra reference spec for C67x; leave unset (evaluate is optional).
 # reference = ""
+
+# ---------------------------------------------------------------------------
+# Structured-decode overlay (Tier 1). Consumed by `generate --isa-config`; keys
+# map 1:1 to the backend-neutral ISAMeta fields. No TMS320 logic in src/.
+# ---------------------------------------------------------------------------
+[decode]
+# TMS320C6000 is little-endian by default (the core is bi-endian/selectable);
+# correct the extractor here since the manual doesn't tabulate it on one line.
+endian = "little"
+
+# The one SPRU733A manual spans four families (per each instruction's
+# "Compatibility" line). Emit one Ghidra <language> per family, all sharing the
+# superset .sla — Ghidra offers TMS320C67x:LE:32:C62x, :C64x, :C67x, :C67x+.
+isa_variants = ["C62x", "C64x", "C67x", "C67x+"]
+
+# VLIW parallel bit (recovered as field `p`, bit 0). Bound in every pattern;
+# marks parallel-issue with the next word.
+parallel_field = "p"
+
+# Conditional-execution prefix (recovered as `creg`/`z`). Bound + shown ahead of
+# the mnemonic. NOTE: not `attach`ed — the grounded bit-diagram parse sizes creg
+# imperfectly for C6x, and `attach names` requires an exact 2^width name list;
+# binding is width-agnostic and safe. Symbolic condition names are a follow-up
+# once field widths are trued up against the opcode tables.
+predicate_fields = ["creg", "z"]
+
+# Register-side selector `s` (bit 1, reliably 1-bit) → SLEIGH attach names.
+# s=0 -> side 1 (A file), s=1 -> side 2 (B file).
+[decode.field_attachments]
+s = ["1", "2"]
+
+# Functional-unit letter per mnemonic → renders the ".unit" qualifier (ADDSP.S).
+# Illustrative/confident subset only: C6x instructions are often issuable on
+# several units, so authoritative per-mnemonic assignment is a capture task
+# (Table + opcode-map). Unlisted mnemonics simply omit the suffix.
+[decode.unit_map]
+LDW = "D"
+LDB = "D"
+LDH = "D"
+STW = "D"
+STB = "D"
+STH = "D"
+MPY = "M"
+MPYH = "M"
+MPYSP = "M"
+MPYDP = "M"
+SMPY = "M"
+B = "S"
+MVK = "S"
+MVKL = "S"
+MVKH = "S"

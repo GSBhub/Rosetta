@@ -134,7 +134,10 @@ def ingest(manual: str, db: str, source: bool, embed_model: str | None,
 
 
 def _generate_or_append(spec, name: str, out_dir: Path, append_slaspec: str | None) -> None:
-    from rosetta.generation.module_generator import ModuleGenerator
+    # Use the package generator (rosetta_generate_sla) — the same one the graph
+    # pipeline uses — so the --spec-json / --append fast paths get grounded
+    # encodings + structured-decode (Tier 1) rendering, not the legacy stack.
+    from rosetta_generate_sla.sla.module_generator import ModuleGenerator
     generator = ModuleGenerator()
     if append_slaspec:
         target = Path(append_slaspec)
@@ -178,6 +181,10 @@ def _generate_or_append(spec, name: str, out_dir: Path, append_slaspec: str | No
 @click.option("--variant", default=None,
     help="Override the ISA variant segment in the Ghidra language ID (e.g. 'v7', 'v8'). "
          "Defaults to whatever was extracted from the manual.")
+@click.option("--isa-config", default=None, type=click.Path(exists=True),
+    help="examples/*.toml whose [decode] table overlays structured-decode data "
+         "(isa_variants, parallel_field, predicate_fields, field_attachments, "
+         "unit_map) onto the spec before rendering. ISA-specifics as data.")
 def generate(
     db: str,
     name: str,
@@ -198,6 +205,7 @@ def generate(
     embed_model: str | None,
     embed_base_url: str | None,
     variant: str | None,
+    isa_config: str | None,
 ) -> None:
     """Extract ISA from database and generate a Ghidra processor module."""
     import dataclasses
@@ -216,6 +224,9 @@ def generate(
         spec = ISASpec.model_validate(_json.loads(Path(spec_json).read_text()))
         if variant:
             spec.meta.variant = variant
+        if isa_config:
+            from rosetta_schemas.overlay import apply_isa_config
+            spec = apply_isa_config(spec, isa_config)
         _generate_or_append(spec, name, out_dir, append_slaspec)
         return
 
@@ -242,6 +253,7 @@ def generate(
         "inter_chunk_sleep": inter_chunk_sleep,
         "resume": resume,
         "debug_save_dir": str(debug_dir),
+        "isa_config": isa_config,
         "errors": [],
     }
 

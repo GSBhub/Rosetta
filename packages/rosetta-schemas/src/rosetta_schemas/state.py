@@ -28,6 +28,7 @@ class PipelineState(TypedDict, total=False):
     resume: bool
     stop_after: str | None     # "meta"|"registers"|"mnemonics"|"stubs"|"instructions"|None
     debug_save_dir: str | None
+    isa_config: str | None     # examples/*.toml whose [decode] table overlays structured-decode data
 
     # ── Per-pass outputs (Pydantic models serialized as model_dump() dicts) ───
     meta: dict[str, Any] | None

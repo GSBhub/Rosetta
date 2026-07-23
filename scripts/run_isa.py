@@ -65,8 +65,13 @@ def main() -> None:
         _run(ingest)
 
     if not args.skip_generate:
-        _run(["rosetta", "generate", "--name", cfg["name"],
-              "--db", cfg["db"], "--out", args.out])
+        gen = ["rosetta", "generate", "--name", cfg["name"],
+               "--db", cfg["db"], "--out", args.out]
+        # The config's own [decode] table (if any) overlays structured-decode
+        # data at render time; a no-op when absent.
+        if "decode" in cfg:
+            gen += ["--isa-config", str(args.config)]
+        _run(gen)
 
     print(f"\nDone: {cfg['name']} -> {args.out}/{cfg['name']}/data/languages/")
     if cfg.get("reference"):

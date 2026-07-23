@@ -11,6 +11,10 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 from rosetta_schemas.models import ISASpec
 
+from rosetta_generate_sla.sla.render import (
+    build_attach_stmts,
+    build_render_instructions,
+)
 from rosetta_generate_sla.sla.sanitize import (
     find_register,
     normalize_instruction,
@@ -94,6 +98,8 @@ class ModuleGenerator:
             "meta": meta,
             "registers": spec.registers,
             "instructions": normalized_instructions,
+            "attach_stmts": build_attach_stmts(normalized_instructions, meta),
+            "render_instructions": build_render_instructions(normalized_instructions, meta),
             "opcode_map": spec.opcode_map,
             "processor_name": processor_name,
             "pc_register": pc,
