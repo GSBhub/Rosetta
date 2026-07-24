@@ -1,0 +1,54 @@
+# TMS320C674x DSP ISA (SPRUFE8B) — the combined manual covering the full C674x
+# instruction set (C62x/C64x/C64x+/C67x/C67x+ ∪ C674x), so it decodes the whole
+# binutils tic6x `insns-c674x.d` ground truth, not just the C67x subset.
+#
+# Data only: consumed generically by the CLI; no TMS320 logic lives in src/.
+name = "TMS320C674x"
+manual = "manuals/tms320c674x.pdf"
+db = "dbs/tms320c674x"
+
+# Same per-instruction "Syntax <MNEMONIC> (.unit) ..." heading as SPRU733A
+# (~219 mnemonics here vs ~108 in the C67x-only manual).
+instruction_pattern = 'Syntax\s+([A-Z][A-Z0-9]*)'
+
+# ---------------------------------------------------------------------------
+# Structured-decode overlay (Tier 1). Same generic C6x mechanisms as C67x.
+# ---------------------------------------------------------------------------
+[decode]
+endian = "little"
+
+# One Ghidra <language> per family (all sharing the superset .sla).
+isa_variants = ["C62x", "C64x", "C64x+", "C67x", "C67x+", "C674x"]
+
+# VLIW parallel bit (field `p`, bit 0).
+parallel_field = "p"
+
+# Conditional-execution prefix (creg/z), bound in every pattern.
+predicate_fields = ["creg", "z"]
+
+# Register-side selector `s` (bit 1) → SLEIGH attach names.
+[decode.field_attachments]
+s = ["1", "2"]
+
+# Illustrative functional-unit letters (many C6x ops are multi-unit; unlisted
+# mnemonics just omit the ".unit" suffix).
+[decode.unit_map]
+LDW = "D"
+LDB = "D"
+LDH = "D"
+LDBU = "D"
+LDHU = "D"
+LDDW = "D"
+STW = "D"
+STB = "D"
+STH = "D"
+STDW = "D"
+MPY = "M"
+MPYH = "M"
+MPYSP = "M"
+MPYDP = "M"
+SMPY = "M"
+B = "S"
+MVK = "S"
+MVKL = "S"
+MVKH = "S"
