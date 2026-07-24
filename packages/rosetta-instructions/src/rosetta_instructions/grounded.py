@@ -76,14 +76,21 @@ def _record_to_fields(rec: dict) -> dict | None:
     }
 
 
+# Max pages an instruction description may span when collecting its diagrams —
+# bounds the page range so we never grab the next instruction's encodings.
+_MAX_PAGE_SPAN = 6
+
+
 def build_encoding_index(settings: Any) -> dict[str, list[dict]]:
     """MNEMONIC(upper) -> list of grounded encodings, for tagged instructions.
 
-    A C6x mnemonic maps to many encodings (one per Opfield opcode value), so
-    every distinct recovered diagram on the instruction's page is returned, not
-    just the widest. Empty when no ``instruction`` entities are tagged (no
-    entity rule at ingest) or no bit diagrams were recovered — the caller then
-    keeps the LLM encoding.
+    An instruction description spans a page *range*: the entity (its ``Syntax``
+    line) up to the next instruction's. Diagrams often sit a page or more after
+    the syntax (and each functional unit — .L/.S/.D — is its own page), so we
+    collect every distinct recovered encoding in that range, not just the
+    entity's exact page. A C6x mnemonic thus maps to many encodings (one per
+    Opfield opcode value across its unit pages). Empty when no ``instruction``
+    entities are tagged or no bit diagrams were recovered.
     """
     from docquery._enumerate import enumerate_entities
 
@@ -95,25 +102,29 @@ def build_encoding_index(settings: Any) -> dict[str, list[dict]]:
         return {}
 
     by_page = _encodings_by_page(vs)
+    # Page range per instruction: [entity page, next instruction's page).
+    pages = sorted({it.page for it in instructions if it.page is not None})
+    next_page = {p: pages[i + 1] for i, p in enumerate(pages[:-1])}
+
     index: dict[str, list[dict]] = {}
     for it in instructions:
         mnem = it.name.strip().upper()
-        if mnem in index:
-            continue  # the entity's own page wins
-        recs = by_page.get(it.page)
-        if not recs:
+        if mnem in index or it.page is None:
             continue
+        start = it.page
+        stop = min(next_page.get(start, start + _MAX_PAGE_SPAN), start + _MAX_PAGE_SPAN)
         encs: list[dict] = []
         seen: set = set()
-        for rec in recs:
-            fields = _record_to_fields(rec)
-            if not fields:
-                continue
-            sig = (fields["encoding_bits"], tuple(sorted(fields["bit_constraints"].items())))
-            if sig in seen:
-                continue
-            seen.add(sig)
-            encs.append(fields)
+        for page in range(start, max(stop, start + 1)):
+            for rec in by_page.get(page, []):
+                fields = _record_to_fields(rec)
+                if not fields:
+                    continue
+                sig = (fields["encoding_bits"], tuple(sorted(fields["bit_constraints"].items())))
+                if sig in seen:
+                    continue
+                seen.add(sig)
+                encs.append(fields)
         if encs:
             index[mnem] = encs
     total = sum(len(v) for v in index.values())
