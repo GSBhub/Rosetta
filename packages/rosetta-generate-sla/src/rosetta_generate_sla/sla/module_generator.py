@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import os
 from importlib.resources import files
 from pathlib import Path
 
@@ -28,7 +29,7 @@ log = logging.getLogger(__name__)
 
 # Minimum fixed opcode bits for an encoding to be emitted as a real decode
 # pattern; fewer than this over-matches unrelated words (see generate()).
-_MIN_CONSTRAINT_BITS = 8
+_MIN_CONSTRAINT_BITS = int(os.environ.get("ROSETTA_MIN_CONSTRAINT_BITS", "8"))
 
 
 def _get_templates_dir() -> Path:
