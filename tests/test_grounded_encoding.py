@@ -79,16 +79,21 @@ def test_build_encoding_index_matches_by_page():
     ])
     idx = build_encoding_index(SimpleNamespace(vs=vs))
     assert set(idx) == {"ADC"}                       # ORPHAN has no diagram
-    assert idx["ADC"]["encoding_bits"] == 32
-    assert idx["ADC"]["bit_constraints"] == {"op_31_27": "11110"}
-    assert idx["ADC"]["operands"] == ["Rn", "Rd"]
+    assert len(idx["ADC"]) == 1
+    assert idx["ADC"][0]["encoding_bits"] == 32
+    assert idx["ADC"][0]["bit_constraints"] == {"op_31_27": "11110"}
+    assert idx["ADC"][0]["operands"] == ["Rn", "Rd"]
 
 
-def test_build_encoding_index_prefers_widest_encoding():
+def test_build_encoding_index_returns_all_page_encodings():
+    # A C6x mnemonic maps to many opcode-map encodings — keep them all, not just
+    # the widest.
     vs = _store([
-        ("chunk", 50, "B prose", "B"),
-        ("encoding_grid", 50, "ENCODING 16-bit: bits[15:12]=1101 imm8[7:0]", None),
-        ("encoding_grid", 50, "ENCODING 32-bit: bits[31:27]=11110 imm10[9:0]", None),
+        ("chunk", 50, "ADD prose", "ADD"),
+        ("encoding_grid", 50, "ENCODING 32-bit: bits[31:27]=11110 bits[11:5]=0000011 imm[4:0]", None),
+        ("encoding_grid", 50, "ENCODING 32-bit: bits[31:27]=11110 bits[11:5]=0100011 imm[4:0]", None),
     ])
     idx = build_encoding_index(SimpleNamespace(vs=vs))
-    assert idx["B"]["encoding_bits"] == 32           # the 32-bit diagram wins
+    assert len(idx["ADD"]) == 2
+    ops = {e["bit_constraints"]["op_11_5"] for e in idx["ADD"]}
+    assert ops == {"0000011", "0100011"}

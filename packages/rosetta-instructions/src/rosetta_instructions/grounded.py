@@ -76,12 +76,14 @@ def _record_to_fields(rec: dict) -> dict | None:
     }
 
 
-def build_encoding_index(settings: Any) -> dict[str, dict]:
-    """MNEMONIC(upper) -> grounded encoding, for instructions tagged in the store.
+def build_encoding_index(settings: Any) -> dict[str, list[dict]]:
+    """MNEMONIC(upper) -> list of grounded encodings, for tagged instructions.
 
-    Empty when no ``instruction`` entities are tagged (no entity rule at
-    ingest) or no bit diagrams were recovered — the caller then keeps the LLM
-    encoding.
+    A C6x mnemonic maps to many encodings (one per Opfield opcode value), so
+    every distinct recovered diagram on the instruction's page is returned, not
+    just the widest. Empty when no ``instruction`` entities are tagged (no
+    entity rule at ingest) or no bit diagrams were recovered — the caller then
+    keeps the LLM encoding.
     """
     from docquery._enumerate import enumerate_entities
 
@@ -93,16 +95,28 @@ def build_encoding_index(settings: Any) -> dict[str, dict]:
         return {}
 
     by_page = _encodings_by_page(vs)
-    index: dict[str, dict] = {}
+    index: dict[str, list[dict]] = {}
     for it in instructions:
+        mnem = it.name.strip().upper()
+        if mnem in index:
+            continue  # the entity's own page wins
         recs = by_page.get(it.page)
         if not recs:
             continue
-        # prefer the widest recovered encoding on the page (T2 over T1, etc.)
-        rec = max(recs, key=lambda r: int(r.get("width") or 0))
-        fields = _record_to_fields(rec)
-        if fields:
-            index.setdefault(it.name.strip().upper(), fields)
-    log.info("Grounded encodings: %d of %d instructions have a recovered bit diagram",
-             len(index), len(instructions))
+        encs: list[dict] = []
+        seen: set = set()
+        for rec in recs:
+            fields = _record_to_fields(rec)
+            if not fields:
+                continue
+            sig = (fields["encoding_bits"], tuple(sorted(fields["bit_constraints"].items())))
+            if sig in seen:
+                continue
+            seen.add(sig)
+            encs.append(fields)
+        if encs:
+            index[mnem] = encs
+    total = sum(len(v) for v in index.values())
+    log.info("Grounded encodings: %d encodings for %d of %d instructions",
+             total, len(index), len(instructions))
     return index

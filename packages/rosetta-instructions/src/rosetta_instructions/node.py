@@ -101,10 +101,12 @@ async def _instructions_async(state: PipelineState) -> dict[str, Any]:
                 tasks = [
                     extract_instruction_async(
                         m, settings, semaphore, executor,
-                        grounded_encoding=encoding_index.get(m.strip().upper()))
+                        grounded_encodings=encoding_index.get(m.strip().upper()))
                     for m in chunk
                 ]
-                chunk_results = await asyncio.gather(*tasks)
+                chunk_lists = await asyncio.gather(*tasks)
+                # Each task returns a list (one InstructionDef per grounded encoding).
+                chunk_results = [d for sub in chunk_lists for d in sub]
                 results.extend(chunk_results)
                 gc.collect()
                 log_memory(f"pass4-chunk-{i // chunk_size}")

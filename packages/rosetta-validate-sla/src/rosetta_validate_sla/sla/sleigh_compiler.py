@@ -39,7 +39,18 @@ def compile_slaspec(slaspec_path: Path, ghidra_home: Path) -> SleighResult:
     cmd = [str(sleigh), str(slaspec_path.name)]
     log.info("Running: %s (cwd=%s)", " ".join(cmd), cwd)
 
-    proc = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True)
+    # The sleigh wrapper needs `java`. When JAVA_HOME is set (e.g. a tools/ JDK)
+    # ensure its bin/ is on PATH for the subprocess even if the caller didn't go
+    # through the CLI's _load_env.
+    import os
+    env = dict(os.environ)
+    java_home = env.get("JAVA_HOME")
+    if java_home:
+        java_bin = str(Path(java_home) / "bin")
+        if java_bin not in env.get("PATH", ""):
+            env["PATH"] = java_bin + os.pathsep + env.get("PATH", "")
+
+    proc = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, env=env)
     errors = [
         line for line in (proc.stdout + proc.stderr).splitlines()
         if "error" in line.lower() or "ERROR" in line

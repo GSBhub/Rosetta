@@ -26,6 +26,10 @@ from rosetta_generate_sla.sla.sanitize import (
 
 log = logging.getLogger(__name__)
 
+# Minimum fixed opcode bits for an encoding to be emitted as a real decode
+# pattern; fewer than this over-matches unrelated words (see generate()).
+_MIN_CONSTRAINT_BITS = 8
+
 
 def _get_templates_dir() -> Path:
     return Path(str(files("rosetta_generate_sla.sla") / "templates"))
@@ -87,6 +91,14 @@ class ModuleGenerator:
                     log.debug("Dropping %s constraint %s=%s (%d bits, field spans %d)",
                               instr.mnemonic, f, v, len(v), span)
             instr.bit_constraints = kept
+
+        # Precision guard: an encoding that pins too few opcode bits over-matches
+        # unrelated words (e.g. a 1-bit constraint matches half the space),
+        # mis-decoding far more than it decodes. Blank those so they fall back to
+        # a non-matching stub — not-decoded beats wrong-decoded.
+        for instr in normalized_instructions:
+            if sum(len(v) for v in instr.bit_constraints.values()) < _MIN_CONSTRAINT_BITS:
+                instr.bit_constraints = {}
 
         pattern_seen: dict[frozenset, int] = {}
         duplicate_indices: set[int] = set()
