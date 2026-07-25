@@ -61,6 +61,21 @@ class ModuleGenerator:
 
         normalized_instructions = [normalize_instruction(i) for i in spec.instructions]
 
+        # Width sanity: a recovered encoding wider than any width the ISA declares
+        # is a mis-parsed diagram (e.g. two stacked 32-bit grids read as one
+        # 64-bit one). Its geometry can't be trusted and an over-wide token makes
+        # SLEIGH reject the constructor outright, so fall back to a stub at the
+        # widest declared width.
+        max_declared = max(spec.meta.instruction_sizes_bits, default=0)
+        if max_declared:
+            for instr in normalized_instructions:
+                if instr.encoding_bits > max_declared:
+                    log.warning("Dropping implausible %d-bit encoding for %s (declared max %d)",
+                                instr.encoding_bits, instr.mnemonic, max_declared)
+                    instr.encoding_bits = max_declared
+                    instr.bit_fields = {}
+                    instr.bit_constraints = {}
+
         canonical_widths: dict[str, int] = {}
         for instr in normalized_instructions:
             for fname, frange in instr.bit_fields.items():

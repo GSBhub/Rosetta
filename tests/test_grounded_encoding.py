@@ -85,6 +85,33 @@ def test_build_encoding_index_matches_by_page():
     assert idx["ADC"][0]["operands"] == ["Rn", "Rd"]
 
 
+def test_build_encoding_index_prefers_owner_tags_over_pages():
+    """Owner-tagged diagrams match by name — even when the diagram sits on a
+    different page than the instruction's syntax heading (packed/split pages)."""
+    and_enc = "ENCODING 32-bit: bits[31:27]=11110 bits[11:5]=1111011 Rn[4:0]"
+    not_enc = "ENCODING 32-bit: bits[31:27]=11110 bits[11:5]=1101110 Rd[4:0]"
+    vs = _store([
+        ("chunk", 125, "AND prose", "AND"),          # syntax on 125 …
+        ("encoding_grid", 126, and_enc, "AND"),      # … diagram on 126, owner-tagged
+        ("chunk", 126, "NOT prose", "NOT"),
+        ("encoding_grid", 126, not_enc, "NOT"),      # same page, different owner
+    ])
+    idx = build_encoding_index(SimpleNamespace(vs=vs))
+    assert set(idx) == {"AND", "NOT"}
+    assert idx["AND"][0]["bit_constraints"]["op_11_5"] == "1111011"
+    assert idx["NOT"][0]["bit_constraints"]["op_11_5"] == "1101110"
+
+
+def test_owner_tag_semicolon_joined_applies_to_each_name():
+    enc = "ENCODING 32-bit: bits[31:27]=11110 bits[11:5]=1111011 Rn[4:0]"
+    vs = _store([
+        ("chunk", 10, "prose", "OR;NOT"),
+        ("encoding_grid", 10, enc, "OR;NOT"),
+    ])
+    idx = build_encoding_index(SimpleNamespace(vs=vs))
+    assert set(idx) == {"OR", "NOT"}
+
+
 def test_build_encoding_index_returns_all_page_encodings():
     # A C6x mnemonic maps to many opcode-map encodings — keep them all, not just
     # the widest.

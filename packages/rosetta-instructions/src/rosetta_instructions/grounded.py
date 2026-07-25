@@ -21,10 +21,8 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 
-def _encodings_by_page(vs: Any) -> dict[Any, list[dict]]:
-    """{page: [parsed ENCODING records]} from the store's encoding_grid docs."""
-    from docquery._bitgrid import parse_encoding_line
-
+def _encoding_docs(vs: Any) -> list[tuple[str, dict]]:
+    """[(document_text, metadata)] for the store's encoding_grid docs."""
     try:
         raw = vs._collection.get(  # type: ignore[attr-defined]
             where={"kind": "encoding_grid"}, include=["documents", "metadatas"])
@@ -34,17 +32,54 @@ def _encodings_by_page(vs: Any) -> dict[Any, list[dict]]:
         # so the cause is visible rather than inferred from a poor decode score.
         log.error("could not read encoding_grid docs (%s); "
                   "grounding disabled, constructors will be stubs", exc)
-        return {}
+        return []
+    return list(zip(raw.get("documents") or [], raw.get("metadatas") or []))
 
+
+def _parse_records(doc: str) -> list[dict]:
+    """Parsed ENCODING records from one encoding_grid document."""
+    from docquery._bitgrid import parse_encoding_line
+
+    out: list[dict] = []
+    for line in (doc or "").splitlines():
+        if line.strip().startswith("ENCODING "):
+            rec = parse_encoding_line(line.strip())
+            if rec and rec.get("segments"):
+                out.append(rec)
+    return out
+
+
+def _encodings_by_page(vs: Any) -> dict[Any, list[dict]]:
+    """{page: [parsed ENCODING records]} from the store's encoding_grid docs."""
     by_page: dict[Any, list[dict]] = {}
-    for doc, meta in zip(raw.get("documents") or [], raw.get("metadatas") or []):
+    for doc, meta in _encoding_docs(vs):
         page = (meta or {}).get("page")
-        for line in (doc or "").splitlines():
-            if line.strip().startswith("ENCODING "):
-                rec = parse_encoding_line(line.strip())
-                if rec and rec.get("segments"):
-                    by_page.setdefault(page, []).append(rec)
+        by_page.setdefault(page, []).extend(_parse_records(doc))
     return by_page
+
+
+def _encodings_by_owner(vs: Any) -> dict[str, list[dict]]:
+    """{MNEMONIC(upper): [parsed ENCODING records]} from owner-tagged docs.
+
+    docquery attributes each recovered diagram to the instruction that owns it by
+    reading-order geometry and tags it as ``entity_instruction`` metadata. Keying
+    off that name is exact, unlike inferring ownership from the page — manuals
+    pack several instructions per page and split descriptions across page breaks.
+    Empty when the store predates owner attribution (callers fall back to pages).
+    """
+    by_owner: dict[str, list[dict]] = {}
+    for doc, meta in _encoding_docs(vs):
+        raw = (meta or {}).get("entity_instruction")
+        if not raw:
+            continue
+        recs = _parse_records(doc)
+        if not recs:
+            continue
+        for name in str(raw).split(";"):
+            name = name.strip().upper()
+            if name:
+                by_owner.setdefault(name, []).extend(recs)
+    return by_owner
 
 
 def _record_to_fields(rec: dict) -> dict | None:
@@ -101,8 +136,37 @@ def build_encoding_index(settings: Any) -> dict[str, list[dict]]:
     if not instructions:
         return {}
 
+    def _collect(recs: list[dict]) -> list[dict]:
+        """Distinct grounded encodings from parsed records."""
+        encs: list[dict] = []
+        seen: set = set()
+        for rec in recs:
+            fields = _record_to_fields(rec)
+            if not fields:
+                continue
+            sig = (fields["encoding_bits"], tuple(sorted(fields["bit_constraints"].items())))
+            if sig in seen:
+                continue
+            seen.add(sig)
+            encs.append(fields)
+        return encs
+
+    # Preferred: docquery attributed each diagram to its owning instruction by
+    # geometry, so match exactly by name.
+    by_owner = _encodings_by_owner(vs)
+    if by_owner:
+        index = {
+            mnem: encs
+            for mnem in {it.name.strip().upper() for it in instructions}
+            if (encs := _collect(by_owner.get(mnem, [])))
+        }
+        log.info("Grounded encodings (owner-matched): %d encodings for %d of %d instructions",
+                 sum(len(v) for v in index.values()), len(index), len(instructions))
+        return index
+
+    # Fallback for stores without owner tags: page range per instruction,
+    # [entity page, next instruction's page).
     by_page = _encodings_by_page(vs)
-    # Page range per instruction: [entity page, next instruction's page).
     pages = sorted({it.page for it in instructions if it.page is not None})
     next_page = {p: pages[i + 1] for i, p in enumerate(pages[:-1])}
 
@@ -113,19 +177,10 @@ def build_encoding_index(settings: Any) -> dict[str, list[dict]]:
             continue
         start = it.page
         stop = min(next_page.get(start, start + _MAX_PAGE_SPAN), start + _MAX_PAGE_SPAN)
-        encs: list[dict] = []
-        seen: set = set()
+        recs: list[dict] = []
         for page in range(start, max(stop, start + 1)):
-            for rec in by_page.get(page, []):
-                fields = _record_to_fields(rec)
-                if not fields:
-                    continue
-                sig = (fields["encoding_bits"], tuple(sorted(fields["bit_constraints"].items())))
-                if sig in seen:
-                    continue
-                seen.add(sig)
-                encs.append(fields)
-        if encs:
+            recs.extend(by_page.get(page, []))
+        if encs := _collect(recs):
             index[mnem] = encs
     total = sum(len(v) for v in index.values())
     log.info("Grounded encodings: %d encodings for %d of %d instructions",
