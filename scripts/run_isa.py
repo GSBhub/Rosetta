@@ -10,8 +10,10 @@ Config keys:
     manual               PDF path, or source dir when source=true (required)
     db                   ChromaDB directory                    (required)
     source               bool; ingest a source-code dir via --source (default false)
-    instruction_pattern  regex whose group 1 is a mnemonic; enables grounded
-                         discovery via --instruction-pattern    (optional)
+    instruction_pattern  regex whose group 1 is a mnemonic; shorthand for
+                         entity_patterns.instruction            (optional)
+    entity_patterns      {name = regex} table of entity rules — instructions,
+                         registers, peripherals, …              (optional)
     reference            Ghidra language ID for `rosetta evaluate` (optional)
 
 Usage:
@@ -60,8 +62,12 @@ def main() -> None:
         ingest = ["rosetta", "ingest", cfg["manual"], "--db", cfg["db"]]
         if cfg.get("source"):
             ingest.append("--source")
+        # instruction_pattern is the common single-entity shorthand; entity_patterns
+        # is the generic form ({name = regex}) for register/peripheral manuals.
         if cfg.get("instruction_pattern"):
-            ingest += ["--instruction-pattern", cfg["instruction_pattern"]]
+            ingest += ["--entity-pattern", f"instruction={cfg['instruction_pattern']}"]
+        for name, pattern in (cfg.get("entity_patterns") or {}).items():
+            ingest += ["--entity-pattern", f"{name}={pattern}"]
         _run(ingest)
 
     if not args.skip_generate:
