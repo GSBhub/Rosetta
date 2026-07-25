@@ -116,6 +116,18 @@ class ModuleGenerator:
             if sum(len(v) for v in instr.bit_constraints.values()) < _MIN_CONSTRAINT_BITS:
                 instr.bit_constraints = {}
 
+        # Multi-encoding can leave a mnemonic with both a grounded constructor and
+        # a stub one (a sibling encoding whose constraints the precision guard
+        # dropped). The stub adds no decode information and can even collide with
+        # a real full-width pattern, so keep it only when nothing else grounds it.
+        grounded_mnemonics = {
+            i.mnemonic for i in normalized_instructions if i.bit_constraints
+        }
+        normalized_instructions = [
+            i for i in normalized_instructions
+            if i.bit_constraints or i.mnemonic not in grounded_mnemonics
+        ]
+
         pattern_seen: dict[frozenset, int] = {}
         duplicate_indices: set[int] = set()
         for idx, instr in enumerate(normalized_instructions):

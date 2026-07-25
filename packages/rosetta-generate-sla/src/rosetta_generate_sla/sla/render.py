@@ -158,7 +158,39 @@ def build_render_instructions(
         symbols = build_field_symbols(instructions)
     par = meta.parallel_field
     out: list[dict] = []
-    stub_id = 0
+
+    # A stub pattern `opWstub=N` pins the whole W-bit word to N, so it is the
+    # *same* pattern as a real constructor that happens to constrain all W bits
+    # to N — SLEIGH rejects the spec for identical patterns. Reserve those values
+    # (and count stubs per width, not globally, so ids stay small and stable).
+    taken: dict[int, set[int]] = {}
+    for instr in instructions:
+        width = instr.encoding_bits
+        if not instr.bit_constraints or width <= 0:
+            continue
+        if sum(len(v) for v in instr.bit_constraints.values()) != width:
+            continue
+        value = 0
+        ok = True
+        for f, v in instr.bit_constraints.items():
+            rng = str(instr.bit_fields.get(f, ""))
+            if ":" not in rng:
+                ok = False
+                break
+            _hi, lo = (int(x) for x in rng.split(":"))
+            value |= int(v, 2) << lo
+        if ok:
+            taken.setdefault(width, set()).add(value)
+
+    stub_ids: dict[int, int] = {}
+
+    def _next_stub(width: int) -> int:
+        nid = stub_ids.get(width, 0)
+        while nid in taken.get(width, ()):
+            nid += 1
+        stub_ids[width] = nid + 1
+        return nid
+
     for instr in instructions:
         width = instr.encoding_bits
         binds: list[str] = []
@@ -201,8 +233,7 @@ def build_render_instructions(
                     core.append(f"{s}=0b{v}")
             pattern = " & ".join(core + binds)
         else:
-            pattern = f"op{width}stub={stub_id}"
-            stub_id += 1
+            pattern = f"op{width}stub={_next_stub(width)}"
             if binds:
                 pattern += " & " + " & ".join(binds)
 

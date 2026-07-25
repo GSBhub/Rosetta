@@ -154,23 +154,23 @@ def build_encoding_index(settings: Any) -> dict[str, list[dict]]:
     # Preferred: docquery attributed each diagram to its owning instruction by
     # geometry, so match exactly by name.
     by_owner = _encodings_by_owner(vs)
+    index: dict[str, list[dict]] = {}
     if by_owner:
-        index = {
-            mnem: encs
-            for mnem in {it.name.strip().upper() for it in instructions}
-            if (encs := _collect(by_owner.get(mnem, [])))
-        }
-        log.info("Grounded encodings (owner-matched): %d encodings for %d of %d instructions",
-                 sum(len(v) for v in index.values()), len(index), len(instructions))
-        return index
+        for mnem in {it.name.strip().upper() for it in instructions}:
+            if encs := _collect(by_owner.get(mnem, [])):
+                index[mnem] = encs
+        n_owned = len(index)
+    else:
+        n_owned = 0
 
-    # Fallback for stores without owner tags: page range per instruction,
-    # [entity page, next instruction's page).
+    # Per-instruction fallback: attribution is rarely total (a diagram whose
+    # heading the geometry could not resolve carries no owner), so instructions
+    # the owner pass missed still get the page-range heuristic rather than
+    # losing their encoding entirely.
     by_page = _encodings_by_page(vs)
     pages = sorted({it.page for it in instructions if it.page is not None})
     next_page = {p: pages[i + 1] for i, p in enumerate(pages[:-1])}
 
-    index: dict[str, list[dict]] = {}
     for it in instructions:
         mnem = it.name.strip().upper()
         if mnem in index or it.page is None:
@@ -183,6 +183,7 @@ def build_encoding_index(settings: Any) -> dict[str, list[dict]]:
         if encs := _collect(recs):
             index[mnem] = encs
     total = sum(len(v) for v in index.values())
-    log.info("Grounded encodings: %d encodings for %d of %d instructions",
-             total, len(index), len(instructions))
+    log.info("Grounded encodings: %d encodings for %d of %d instructions "
+             "(%d owner-matched, %d by page fallback)",
+             total, len(index), len(instructions), n_owned, len(index) - n_owned)
     return index
