@@ -88,6 +88,57 @@ def cli() -> None:
 
 
 # ---------------------------------------------------------------------------
+# infer-config
+# ---------------------------------------------------------------------------
+
+
+@cli.command("infer-config")
+@click.argument("manual", type=click.Path(exists=True))
+@click.option("--name", default=None, help="Processor name (default: manual filename stem)")
+@click.option("--entity", "entity_name", default="instruction", show_default=True,
+              help="Entity kind to infer a pattern for, e.g. 'instruction' or 'register'")
+@click.option("--out", "out_path", default=None, type=click.Path(),
+              help="Write the starter config here (default: print to stdout)")
+def infer_config(manual: str, name: str | None, entity_name: str, out_path: str | None) -> None:
+    """Infer a starter ISA config (examples/*.toml) by reading MANUAL's structure.
+
+    Scores candidate entity patterns against the document's own recovered
+    structure — the right pattern is the one whose headings actually own the
+    encoding diagrams and tables — and derives the [decode] fields from those
+    encodings. Uses no LLM and no embeddings, so it is cheap to run before
+    committing to an ingest.
+
+    The result is a STARTER config to review: a wrong decode field silently
+    corrupts every instruction's decode pattern, so the evidence behind each
+    inferred value is written alongside it.
+    """
+    from docquery._infer import score_patterns
+    from docquery._pdf import extract_page_text
+    from rosetta.inference import infer_decode_fields, render_config
+
+    proc = name or Path(manual).stem.replace("-", "_")
+    click.echo(f"Scoring entity patterns against {manual} ...", err=True)
+    scored = score_patterns(manual, entity_name=entity_name)
+    if not scored:
+        click.echo("No structure recovered — cannot infer a pattern for this manual.", err=True)
+        sys.exit(1)
+    best = scored[0]
+    click.echo(
+        f"Best: {best['name']} (score {best['score']}, precision {best['precision']}, "
+        f"{best['owners']} of {best['entities']} tagged entities own a block)", err=True)
+
+    decode = infer_decode_fields(manual, extract_page_text(manual))
+    text = render_config(
+        proc, manual, f"dbs/{proc.lower()}", scored, decode, entity_name=entity_name,
+    )
+    if out_path:
+        Path(out_path).write_text(text)
+        click.echo(f"Wrote {out_path} — review before use.", err=True)
+    else:
+        click.echo(text)
+
+
+# ---------------------------------------------------------------------------
 # ingest
 # ---------------------------------------------------------------------------
 
