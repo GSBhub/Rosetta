@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import copy
+import logging
 import re
 
 from rosetta_schemas.models import InstructionDef, RegisterDef
+
+log = logging.getLogger(__name__)
 
 _BAD_PCODE = re.compile(
     r"Error:|Unknown\b|undefined\b|TODO\b|not extracted|"
@@ -46,6 +49,32 @@ def sanitize_register(reg: "RegisterDef") -> "RegisterDef":
     r.name = sanitize_ident(reg.name)
     r.aliases = [sanitize_ident(a) for a in reg.aliases]
     return r
+
+
+def sanitize_registers(registers: "list[RegisterDef]") -> "list[RegisterDef]":
+    """Sanitize a register list, keeping every name distinct.
+
+    Coercion is many-to-one — ``CPU ID``, ``CPU-ID`` and ``CPU.ID`` all become
+    ``CPU_ID`` — so sanitizing registers independently can collapse two
+    architectural registers onto one identifier. SLEIGH would then either reject
+    the duplicate in ``define register`` or, worse, alias two distinct registers
+    to the same varnode. Collisions get a numeric suffix and are logged, since
+    they mean the manual's names were ambiguous.
+    """
+    out: list[RegisterDef] = []
+    used: set[str] = set()
+    for reg in registers:
+        r = sanitize_register(reg)
+        if r.name in used:
+            base, n = r.name, 2
+            while f"{base}_{n}" in used:
+                n += 1
+            log.warning("Register name %r collides with %r after sanitizing; using %s_%d",
+                        reg.name, base, base, n)
+            r.name = f"{base}_{n}"
+        used.add(r.name)
+        out.append(r)
+    return out
 
 
 def sanitize_pcode(hint: str) -> str:

@@ -131,8 +131,11 @@ def main() -> None:
     print(f"Ground truth : {args.dfile}  ({len(truth)} instructions)")
     print(f"Language     : {args.language}")
     print("Disassembling in headless Ghidra ...")
-    decoded = run_ghidra(binary, args.language, len(truth), ghidra, java)
-    binary.unlink(missing_ok=True)
+    try:
+        decoded = run_ghidra(binary, args.language, len(truth), ghidra, java)
+    finally:
+        # delete=False above, so clean up even when Ghidra raises/times out.
+        binary.unlink(missing_ok=True)
 
     correct = miss_decode = wrong = 0
     hit_mnems: Counter[str] = Counter()

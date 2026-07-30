@@ -204,3 +204,19 @@ def test_every_declared_token_is_unique_and_constructors_reference_them():
                    for s in re.findall(r"& (\w+)", line)}
     undeclared = referenced - set(declared) - {"op32stub", "op16stub"}
     assert not undeclared, f"constructors reference undeclared symbols: {undeclared}"
+
+
+def test_precision_guard_drops_under_constrained_encodings():
+    """An encoding pinning too few opcode bits over-matches unrelated words, so
+    it falls back to a non-matching stub — not-decoded beats wrong-decoded."""
+    spec = _tms_spec()
+    spec.instructions = [
+        # 7 bits: below the threshold -> blanked to a stub
+        _instr("WEAK", {"op_11_5": "11:5"}, {"op_11_5": "0000011"}),
+        # 10 bits: kept as a real pattern
+        _instr("STRONG", {"op_11_2": "11:2"}, {"op_11_2": "1011001000"}),
+    ]
+    slaspec = _render(spec).split("@@LDEFS@@")[0]
+    assert ":STRONG is op_11_232=0b1011001000" in slaspec
+    weak = [ln for ln in slaspec.splitlines() if ln.startswith(":WEAK")]
+    assert weak and "stub=" in weak[0], f"under-constrained encoding kept: {weak}"

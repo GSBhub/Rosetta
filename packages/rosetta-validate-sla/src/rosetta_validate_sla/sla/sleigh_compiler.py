@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,6 +23,22 @@ class SleighResult:
         return self.returncode == 0 and not self.errors
 
 
+def java_env() -> dict[str, str]:
+    """A copy of the environment with ``$JAVA_HOME/bin`` on PATH.
+
+    Ghidra's shell wrappers invoke ``java``, which a caller that did not go
+    through the CLI's ``_load_env`` (tests, library use) may not have on PATH.
+    Returns a copy so the parent process is left alone.
+    """
+    env = dict(os.environ)
+    java_home = env.get("JAVA_HOME")
+    if java_home:
+        java_bin = str(Path(java_home) / "bin")
+        if java_bin not in env.get("PATH", ""):
+            env["PATH"] = java_bin + os.pathsep + env.get("PATH", "")
+    return env
+
+
 def _find_sleigh(ghidra_home: Path) -> Path:
     for c in [ghidra_home / "support" / "sleigh", ghidra_home / "support" / "sleigh.bat"]:
         if c.exists():
@@ -39,18 +56,8 @@ def compile_slaspec(slaspec_path: Path, ghidra_home: Path) -> SleighResult:
     cmd = [str(sleigh), str(slaspec_path.name)]
     log.info("Running: %s (cwd=%s)", " ".join(cmd), cwd)
 
-    # The sleigh wrapper needs `java`. When JAVA_HOME is set (e.g. a tools/ JDK)
-    # ensure its bin/ is on PATH for the subprocess even if the caller didn't go
-    # through the CLI's _load_env.
-    import os
-    env = dict(os.environ)
-    java_home = env.get("JAVA_HOME")
-    if java_home:
-        java_bin = str(Path(java_home) / "bin")
-        if java_bin not in env.get("PATH", ""):
-            env["PATH"] = java_bin + os.pathsep + env.get("PATH", "")
-
-    proc = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, env=env)
+    proc = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True,
+                          env=java_env())
     errors = [
         line for line in (proc.stdout + proc.stderr).splitlines()
         if "error" in line.lower() or "ERROR" in line
