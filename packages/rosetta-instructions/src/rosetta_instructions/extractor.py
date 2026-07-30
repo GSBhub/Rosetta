@@ -21,15 +21,37 @@ _SYSTEM_PROMPT = (
 )
 
 
+def _apply_grounded_encoding(instr: InstructionDef, grounded: dict | None) -> InstructionDef:
+    """Overwrite the LLM's encoding with the grounded bit diagram, if present.
+
+    The decode-critical fields (width, bit_fields, bit_constraints, and the
+    operand order they imply) come from docquery's deterministic recovery, so
+    a hallucinated bit range cannot reach the SLEIGH constructor. Semantics,
+    variants, and the p-code hint stay as the LLM produced them.
+    """
+    if not grounded:
+        return instr
+    instr.encoding_bits = grounded["encoding_bits"] or instr.encoding_bits
+    instr.bit_fields = grounded["bit_fields"]
+    instr.bit_constraints = grounded["bit_constraints"]
+    if grounded["operands"]:
+        instr.operands = grounded["operands"]
+    return instr
+
+
 async def extract_instruction_async(
     mnemonic: str,
     settings: Settings,
     semaphore: asyncio.Semaphore,
     executor: ThreadPoolExecutor,
+    grounded_encoding: dict | None = None,
 ) -> InstructionDef:
     """Async wrapper: runs sync ExtractionPipeline in a thread-pool executor.
 
     settings.vs must already be populated via _build_chroma() before calling.
+    When *grounded_encoding* is supplied (from docquery's recovered bit
+    diagram), it overrides the LLM's bit_fields / bit_constraints so the decode
+    pattern is grounded rather than transcribed by the model.
     """
     async with semaphore:
         query = (
@@ -46,12 +68,13 @@ async def extract_instruction_async(
                 settings=settings,
             )
             result = pipeline.run(query)
-            if isinstance(result, InstructionDef):
-                return result
-            return InstructionDef(mnemonic=mnemonic, semantics=str(result), encoding_bits=32)
+            if not isinstance(result, InstructionDef):
+                result = InstructionDef(mnemonic=mnemonic, semantics=str(result), encoding_bits=32)
+            return _apply_grounded_encoding(result, grounded_encoding)
 
         try:
             return await asyncio.get_event_loop().run_in_executor(executor, _run_sync)
         except Exception as exc:
             log.warning("Failed to extract %s: %s", mnemonic, exc)
-            return InstructionDef(mnemonic=mnemonic, semantics="Unknown", encoding_bits=32)
+            stub = InstructionDef(mnemonic=mnemonic, semantics="Unknown", encoding_bits=32)
+            return _apply_grounded_encoding(stub, grounded_encoding)

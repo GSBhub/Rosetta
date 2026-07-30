@@ -79,20 +79,34 @@ def cli() -> None:
          "all .c, .h, .py, .cpp, .hpp files are loaded as text chunks.")
 @click.option("--embed-model", default=None, help="Override EMBED_MODEL env var")
 @click.option("--embed-base-url", default=None, help="Override EMBED_BASE_URL env var")
-def ingest(manual: str, db: str, source: bool, embed_model: str | None, embed_base_url: str | None) -> None:
+@click.option("--instruction-pattern", default=None, metavar="REGEX",
+              help="Per-ISA regex whose capture group is an instruction mnemonic "
+                   "in the manual's headings/opcode tables (searched multiline). "
+                   "Tags instructions so pass-3 discovery and pass-4 encodings are "
+                   "grounded instead of LLM-guessed. "
+                   r"E.g. ARM: 'A7\.7\.\d+\s*\n\s*([A-Z][A-Z0-9]*)'.")
+def ingest(manual: str, db: str, source: bool, embed_model: str | None,
+           embed_base_url: str | None, instruction_pattern: str | None) -> None:
     """Ingest a PDF manual (or source code directory) into a docquery RAG database.
 
     Run multiple times against the same --db to supplement an existing database
     with additional manuals — content is deduplicated by hash so there are no
     duplicate chunks.  Use this when pass 3 mnemonic discovery reports low
     coverage and the primary manual does not document all instructions.
+
+    Pass --instruction-pattern to tag every instruction the manual defines: the
+    mnemonic list and per-instruction bit fields are then read from the
+    document's structure deterministically, eliminating the LLM hallucinations
+    of mnemonic discovery and encoding extraction.
     """
     import docquery
-    from docquery.config import Settings
+    from docquery.config import EntityRule, Settings
 
     _apply_model_overrides(None, None, embed_model, embed_base_url)
     settings = Settings()
     settings.db_path = db
+    if instruction_pattern:
+        settings.entity_rules = [EntityRule(name="instruction", pattern=instruction_pattern)]
 
     src = Path(manual)
     if source:
@@ -120,7 +134,10 @@ def ingest(manual: str, db: str, source: bool, embed_model: str | None, embed_ba
 
 
 def _generate_or_append(spec, name: str, out_dir: Path, append_slaspec: str | None) -> None:
-    from rosetta.generation.module_generator import ModuleGenerator
+    # Use the package generator (rosetta_generate_sla) — the same one the graph
+    # pipeline uses — so the --spec-json / --append fast paths get grounded
+    # encodings + structured-decode (Tier 1) rendering, not the legacy stack.
+    from rosetta_generate_sla.sla.module_generator import ModuleGenerator
     generator = ModuleGenerator()
     if append_slaspec:
         target = Path(append_slaspec)
@@ -164,6 +181,10 @@ def _generate_or_append(spec, name: str, out_dir: Path, append_slaspec: str | No
 @click.option("--variant", default=None,
     help="Override the ISA variant segment in the Ghidra language ID (e.g. 'v7', 'v8'). "
          "Defaults to whatever was extracted from the manual.")
+@click.option("--isa-config", default=None, type=click.Path(exists=True),
+    help="examples/*.toml whose [decode] table overlays structured-decode data "
+         "(isa_variants, parallel_field, predicate_fields, field_attachments, "
+         "unit_map) onto the spec before rendering. ISA-specifics as data.")
 def generate(
     db: str,
     name: str,
@@ -184,6 +205,7 @@ def generate(
     embed_model: str | None,
     embed_base_url: str | None,
     variant: str | None,
+    isa_config: str | None,
 ) -> None:
     """Extract ISA from database and generate a Ghidra processor module."""
     import dataclasses
@@ -202,6 +224,9 @@ def generate(
         spec = ISASpec.model_validate(_json.loads(Path(spec_json).read_text()))
         if variant:
             spec.meta.variant = variant
+        if isa_config:
+            from rosetta_schemas.overlay import apply_isa_config
+            spec = apply_isa_config(spec, isa_config)
         _generate_or_append(spec, name, out_dir, append_slaspec)
         return
 
@@ -228,6 +253,7 @@ def generate(
         "inter_chunk_sleep": inter_chunk_sleep,
         "resume": resume,
         "debug_save_dir": str(debug_dir),
+        "isa_config": isa_config,
         "errors": [],
     }
 

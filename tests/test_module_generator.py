@@ -88,3 +88,16 @@ def test_64bit_word_size(tmp_path):
     text = (lang_dir / "MyISA64.slaspec").read_text()
     assert "define endian=big" in text
     assert "NOP" in text
+
+
+def test_multiline_pcode_hint_cannot_leak_into_the_body():
+    """A rejected hint is kept as a comment, and a SLEIGH '#' comment ends at
+    the newline — so a multi-line hint must be flattened or its own prose lands
+    in the constructor body as invalid p-code."""
+    from rosetta_generate_sla.sla.sanitize import sanitize_pcode
+
+    out = sanitize_pcode("VFPNegMul_VNMLA (if op == '1')\nd = if dp_operation\nthen 2")
+    body = out.splitlines()
+    assert body[0].startswith("# ")
+    assert len(body) == 2, f"comment leaked onto extra lines: {body}"
+    assert body[1].strip() == "local tmp:4 = 0;"

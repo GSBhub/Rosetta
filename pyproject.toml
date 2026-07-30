@@ -62,3 +62,7 @@ rosetta-pcode        = { workspace = true }
 rosetta-generate-sla = { workspace = true }
 rosetta-validate-sla = { workspace = true }
 rosetta-evaluate-sla = { workspace = true }
+# Grounded discovery (enumerate_entities + encoding recovery) lands in docquery
+# via the schema-driven enumeration PR. Until it merges to the default branch,
+# point at a local checkout for `uv sync`; revert to the git pin afterward.
+# docquery = { path = "/home/scotty/Documents/git/docquery", editable = true }

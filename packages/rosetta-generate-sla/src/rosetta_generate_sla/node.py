@@ -29,6 +29,11 @@ def generate_sla_node(state: PipelineState) -> dict[str, Any]:
     processor_name = state.get("processor_name", "Unknown")
     out_dir = Path(state.get("out_dir", "./output"))
 
+    isa_config = state.get("isa_config")
+    if isa_config:
+        from rosetta_schemas.overlay import apply_isa_config
+        spec = apply_isa_config(spec, isa_config)
+
     try:
         generator = ModuleGenerator()
         lang_dir = generator.generate(spec, processor_name, out_dir)

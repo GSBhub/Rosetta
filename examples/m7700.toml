@@ -1,0 +1,23 @@
+# Mitsubishi/Renesas M7700 (7700-series) ISA — ingested from the r2-m7700
+# radare2 plugin source rather than a PDF manual.
+#
+#   git clone https://github.com/gsbhub/r2-m7700 manuals/r2-m7700
+#
+# Data only: consumed generically by `rosetta ingest --source`; no M7700
+# logic lives in src/.
+name = "M7700"
+manual = "manuals/r2-m7700"
+db = "dbs/m7700"
+
+# --source: ingest the C/H files as text chunks (no PDF).
+source = true
+
+# The plugin declares its full mnemonic table as quoted uppercase tokens in
+# asm/arch/m7700.h `instruction_set[] = { "ADC", "AND", ... }`. Capturing those
+# tags the ~103 mnemonics deterministically for pass-3 discovery. Bit-diagram
+# (encoding_grid) recovery is a PDF feature, so per-instruction encodings still
+# come from the LLM pass for M7700.
+instruction_pattern = '"([A-Z][A-Z0-9]{1,4})"'
+
+# No stock Ghidra reference spec for M7700.
+# reference = ""

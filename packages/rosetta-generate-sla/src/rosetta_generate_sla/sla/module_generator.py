@@ -11,6 +11,12 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 from rosetta_schemas.models import ISASpec
 
+from rosetta_generate_sla.sla.render import (
+    build_attach_stmts,
+    build_field_symbols,
+    build_render_instructions,
+    build_tokens,
+)
 from rosetta_generate_sla.sla.sanitize import (
     find_register,
     normalize_instruction,
@@ -58,11 +64,27 @@ class ModuleGenerator:
                     except (ValueError, IndexError):
                         pass
 
+        # A constraint must fill its own field exactly. A shorter value is not a
+        # narrower match — SLEIGH would read it as a smaller number in the same
+        # field, i.e. a different (silently wrong) decode pattern — so require
+        # equality, and check against the instruction's own range rather than a
+        # global width, since a field name may sit at different ranges.
         for instr in normalized_instructions:
-            instr.bit_constraints = {
-                f: v for f, v in instr.bit_constraints.items()
-                if f not in canonical_widths or len(v) <= canonical_widths[f]
-            }
+            kept: dict[str, str] = {}
+            for f, v in instr.bit_constraints.items():
+                parts = str(instr.bit_fields.get(f, "")).split(":")
+                if len(parts) != 2:
+                    continue
+                try:
+                    span = abs(int(parts[0]) - int(parts[1])) + 1
+                except ValueError:
+                    continue
+                if len(v) == span:
+                    kept[f] = v
+                else:
+                    log.debug("Dropping %s constraint %s=%s (%d bits, field spans %d)",
+                              instr.mnemonic, f, v, len(v), span)
+            instr.bit_constraints = kept
 
         pattern_seen: dict[frozenset, int] = {}
         duplicate_indices: set[int] = set()
@@ -87,6 +109,11 @@ class ModuleGenerator:
         meta = copy.copy(spec.meta)
         meta.instruction_sizes_bits = all_widths
 
+        # One symbol table shared by the token declarations and every constructor
+        # that references them — they must agree or the spec decodes wrong bits.
+        symbols = build_field_symbols(normalized_instructions)
+        tokens = build_tokens(normalized_instructions, all_widths, symbols)
+
         is_cisc = meta.encoding_style == "opcode_table"
         slaspec_template = "processor.slaspec.cisc.j2" if is_cisc else "processor.slaspec.j2"
 
@@ -94,6 +121,10 @@ class ModuleGenerator:
             "meta": meta,
             "registers": spec.registers,
             "instructions": normalized_instructions,
+            "tokens": tokens,
+            "attach_stmts": build_attach_stmts(normalized_instructions, meta, symbols),
+            "render_instructions": build_render_instructions(
+                normalized_instructions, meta, symbols),
             "opcode_map": spec.opcode_map,
             "processor_name": processor_name,
             "pc_register": pc,

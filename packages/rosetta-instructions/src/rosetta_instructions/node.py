@@ -59,9 +59,15 @@ async def _instructions_async(state: PipelineState) -> dict[str, Any]:
 
     try:
         from rosetta_utils.chroma import get_chroma_wrapper
+        from rosetta_instructions.grounded import build_encoding_index
         settings = Settings(**(state.get("settings_dict") or {}))
         settings.db_path = state["db_path"]
         settings.vs = get_chroma_wrapper(settings.db_path, settings)
+
+        # Grounded bit diagrams (deterministic) override the LLM's encoding per
+        # instruction; empty when the store has no instruction entities / no
+        # recovered diagrams, in which case the LLM encoding is kept.
+        encoding_index = build_encoding_index(settings)
 
         results: list[InstructionDef] = []
 
@@ -93,7 +99,9 @@ async def _instructions_async(state: PipelineState) -> dict[str, Any]:
                 log.info("Pass 4: %d–%d / %d", i + 1, i + len(chunk), len(mnemonics))
                 check_memory_headroom(min_free_gb=memory_warn_gb)
                 tasks = [
-                    extract_instruction_async(m, settings, semaphore, executor)
+                    extract_instruction_async(
+                        m, settings, semaphore, executor,
+                        grounded_encoding=encoding_index.get(m.strip().upper()))
                     for m in chunk
                 ]
                 chunk_results = await asyncio.gather(*tasks)

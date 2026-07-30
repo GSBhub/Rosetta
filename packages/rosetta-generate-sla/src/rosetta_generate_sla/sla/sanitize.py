@@ -29,10 +29,14 @@ def sanitize_pcode(hint: str) -> str:
     s = hint.strip() if hint else ""
     if not s:
         return "local tmp:4 = 0;"
+    # The rejected hint is kept as a comment, which must be a single line: a
+    # SLEIGH '#' comment ends at the newline, so a multi-line hint would spill
+    # its own prose into the constructor body as invalid p-code.
+    comment = " ".join(s.split())[:80]
     if not s.endswith(";"):
-        return f"# {s[:80]}\n    local tmp:4 = 0;"
+        return f"# {comment}\n    local tmp:4 = 0;"
     if _BAD_PCODE.search(s):
-        return f"# {s[:80]}\n    local tmp:4 = 0;"
+        return f"# {comment}\n    local tmp:4 = 0;"
     return s
 
 
@@ -58,6 +62,28 @@ def normalize_bit_fields(bit_fields: dict[str, str]) -> dict[str, str]:
 
 
 
+def normalize_bit_constraints(
+    bit_constraints: dict[str, str], bit_fields: dict[str, str]
+) -> dict[str, str]:
+    """Keep only constraints that render as a valid SLEIGH pattern equation.
+
+    A constraint survives when its field is a defined token field (present in
+    the already-normalized bit_fields) and its value is pure binary, so the
+    template can emit ``<field>=0b<value>``. Grounded opcode fields are named
+    ``op_<hi>_<lo>`` (position-unique, collision-safe); this is what turns a
+    stub constructor into a real decode pattern.
+    """
+    result: dict[str, str] = {}
+    for name, value in bit_constraints.items():
+        if name not in bit_fields:
+            continue
+        v = str(value).strip()
+        if not _PURE_BINARY.match(v):
+            continue
+        result[name] = v
+    return result
+
+
 def normalize_instruction(instr: InstructionDef) -> InstructionDef:
     ni = copy.copy(instr)
     if ni.encoding_bits <= 0:
@@ -66,8 +92,15 @@ def normalize_instruction(instr: InstructionDef) -> InstructionDef:
         ni.encoding_bits = ((ni.encoding_bits + 7) // 8) * 8
     ni.mnemonic = ni.mnemonic.replace(" ", "_")
     ni.bit_fields = normalize_bit_fields(ni.bit_fields)
-    ni.bit_constraints = {}
+    # Preserve grounded fixed-opcode bits as the decode pattern (filtered to
+    # token-defined fields with pure-binary values). generate() further filters
+    # over-wide values and de-duplicates identical patterns for compile-safety.
+    ni.bit_constraints = normalize_bit_constraints(ni.bit_constraints, ni.bit_fields)
     ni.semantics = " ".join(ni.semantics.splitlines())
+    # Operand display binding is intentionally omitted: binding named register
+    # fields in the pattern risks SLEIGH field-name collisions/reserved words
+    # that can't be verified without the Ghidra compiler. Display stays mnemonic
+    # -only; the pattern still decodes correctly from the fixed opcode bits.
     ni.operands = []
     return ni
 

@@ -20,41 +20,28 @@ define register offset=0x00 size={{ reg_size }} [
 # Register aliases: {{ registers | selectattr('aliases') | map(attribute='name') | join(', ') }} have aliases — omitted to avoid duplicate-offset errors in SLEIGH.
 
 # Tokens (instruction bit fields)
-{% for width in meta.instruction_sizes_bits %}
-{% set tok_ns = namespace(seen_fields=[]) %}
-define token instr{{ width }}({{ width }})
-{% for instr in instructions %}
-{% if instr.encoding_bits == width %}
-{% for field_name, bit_range in instr.bit_fields.items() %}
-{% if field_name not in tok_ns.seen_fields %}
-    {{ field_name }}{{ width }} = ({{ bit_range.split(':') | reverse | join(',') }})
-{% set tok_ns.seen_fields = tok_ns.seen_fields + [field_name] %}
-{% endif %}
+{# Symbols come precomputed from render.build_tokens so the declarations here
+   and the constructors below are derived from the same table. #}
+{% for tok in tokens %}
+define token instr{{ tok.width }}({{ tok.width }})
+{% for f in tok.fields %}
+    {{ f.sym }} = ({{ f.lo }},{{ f.hi }})
 {% endfor %}
-{% endif %}
-{% endfor %}
-    op{{ width }}stub = (0,{{ width - 1 }})
+    op{{ tok.width }}stub = (0,{{ tok.width - 1 }})
 ;
 
 {% endfor %}
 
-# Instruction constructors
-{% set instr_ns = namespace(stub_id=0) %}
-{% for instr in instructions %}
-# {{ instr.mnemonic }}: {{ instr.semantics | truncate(80) }}
-{% set display = instr.mnemonic %}
-{% if instr.operands %}
-{% set display = display + ' ' + (instr.operands | join(', ')) %}
-{% endif %}
-{% if instr.bit_constraints %}
-:{{ display }} is {% for field, val in instr.bit_constraints.items() %}{{ field }}{{ instr.encoding_bits }}=0b{{ val }}{% if not loop.last %} & {% endif %}{% endfor %}
+# Attached operand fields (register side, condition register, functional unit, …)
+{% for a in attach_stmts %}
+attach names [ {{ a.sym }} ] [ {{ a.names | join(' ') }} ];
+{% endfor %}
 
-{% else %}
-:{{ display }} is op{{ instr.encoding_bits }}stub={{ instr_ns.stub_id }}
-{% set instr_ns.stub_id = instr_ns.stub_id + 1 %}
-{% endif %}
+# Instruction constructors
+{% for ri in render_instructions %}
+:{{ ri.display }} is {{ ri.pattern }}
 {
-    {{ instr.pcode_hint | sanitize_pcode }}
+    {{ ri.pcode_hint | sanitize_pcode }}
 }
 
 {% endfor %}

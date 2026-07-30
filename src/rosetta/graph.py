@@ -30,7 +30,12 @@ def build_graph() -> StateGraph:
     g.add_node("mnemonics",    mnemonics_node)
     g.add_node("opcode_map",       opcode_map_node)
     g.add_node("opcode_map_pcode", opcode_map_pcode_node)
-    g.add_node("instructions",     instructions_node)
+    # defer=True makes the fan-in a true barrier: instructions runs only once,
+    # after ALL pending upstream work is done. Without it (LangGraph >=1.x), the
+    # short registers branch (ingest→registers) fires instructions before the
+    # longer meta→classify→mnemonics branch has populated mnemonics, so it runs
+    # with 0 instructions and generate_sla renders an empty module.
+    g.add_node("instructions",     instructions_node, defer=True)
     g.add_node("pcode",        pcode_node)
     g.add_node("generate_sla", generate_sla_node)
     g.add_node("validate_sla", validate_sla_node)

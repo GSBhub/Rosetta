@@ -39,6 +39,45 @@ class ISAMeta(BaseModel):
             "Empty for ISAs without prefix bytes."
         ),
     )
+    # --- Backend-neutral structured-decode extensions (Tier 1) ---
+    # These are generic ISA concepts (a VLIW DSP just exercises them hardest).
+    # Values are supplied per-ISA as data (examples/*.toml) and consumed by the
+    # renderer; they carry over unchanged to a future QEMU/TCG backend.
+    isa_variants: list[str] = Field(
+        default_factory=list,
+        description=(
+            "ISA family/feature variants that share one encoding, e.g. "
+            "['C62x','C64x','C67x','C67x+']. When non-empty the SLEIGH backend "
+            "emits one <language> per entry (all sharing the superset .sla). "
+            "Empty means a single language keyed on `variant`."
+        ),
+    )
+    parallel_field: str | None = Field(
+        default=None,
+        description=(
+            "Name of the bit field that marks parallel issue with the next "
+            "instruction word (VLIW p-bit, e.g. 'p'). Rendered as a '||' display "
+            "prefix when set. None for non-VLIW ISAs."
+        ),
+    )
+    predicate_fields: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Leading predication field group rendered as a conditional display "
+            "prefix, e.g. ['creg','z'] for TMS320 conditional execution. Empty "
+            "for unconditional ISAs."
+        ),
+    )
+    field_attachments: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description=(
+            "SLEIGH `attach names` data shared across all instructions: bit field "
+            "name -> ordered symbol names indexed by field value (e.g. "
+            "'s' -> ['1','2'] for the C6x register-side bit). Renders raw bit "
+            "fields as symbolic operands. Per-instruction attachments are not "
+            "needed when the field layout is uniform."
+        ),
+    )
 
 
 class OpcodeDef(BaseModel):
@@ -112,6 +151,23 @@ class InstructionDef(BaseModel):
     pcode_hint: str = Field(
         default="",
         description="SLEIGH P-code approximation of the semantics",
+    )
+    isa_variants: list[str] = Field(
+        default_factory=list,
+        description=(
+            "ISA families that support this instruction (from the manual's "
+            "'Compatibility' line), e.g. ['C67x','C67x+']. Informational in "
+            "Tier 1 (the superset language decodes all); enables per-family "
+            "gating in Tier 2. A subset of ISAMeta.isa_variants."
+        ),
+    )
+    functional_unit: str = Field(
+        default="",
+        description=(
+            "Functional unit letter this instruction issues on, e.g. 'S','L',"
+            "'M','D' for TMS320C6x. Combined with the side/attachment field it "
+            "renders the '.unit' qualifier (e.g. '.S1'). Empty when N/A."
+        ),
     )
 
 
