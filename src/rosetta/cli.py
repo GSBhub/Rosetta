@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -58,6 +59,27 @@ def _apply_model_overrides(
         os.environ["EMBED_MODEL"] = embed_model
     if embed_base_url:
         os.environ["EMBED_BASE_URL"] = embed_base_url
+
+
+def parse_entity_patterns(specs: list[str]) -> list[tuple[str, str]]:
+    r"""Parse ``NAME=REGEX`` entity-pattern specs into ``[(name, regex)]``.
+
+    A bare regex (no ``NAME=``) means the common instruction case. The prefix is
+    only treated as a kind when it looks like one: ``=`` is common *inside*
+    regexes (lookarounds), so splitting on the first ``=`` unconditionally would
+    turn ``Syntax\s+([A-Z]+)(?=\s)`` into a rule named ``Syntax\s+([A-Z]+)(?``
+    with a truncated pattern — silently, surfacing much later as "no entities
+    tagged". Raises ValueError when the pattern is empty.
+    """
+    out: list[tuple[str, str]] = []
+    for spec in specs:
+        name, sep, pattern = spec.partition("=")
+        if not sep or not re.fullmatch(r"\w+", name):
+            name, pattern = "instruction", spec
+        if not pattern:
+            raise ValueError(f"--entity-pattern needs NAME=REGEX, got {spec!r}")
+        out.append((name.strip(), pattern))
+    return out
 
 
 @click.group()
@@ -116,15 +138,12 @@ def ingest(manual: str, db: str, source: bool, embed_model: str | None,
     specs = list(entity_patterns)
     if instruction_pattern:
         specs.append(f"instruction={instruction_pattern}")
-    rules = []
-    for spec in specs:
-        name, sep, pattern = spec.partition("=")
-        if not sep:                      # bare regex → the common instruction case
-            name, pattern = "instruction", spec
-        if not pattern:
-            click.echo(f"Error: --entity-pattern needs NAME=REGEX, got {spec!r}", err=True)
-            sys.exit(1)
-        rules.append(EntityRule(name=name.strip(), pattern=pattern))
+    try:
+        parsed = parse_entity_patterns(specs)
+    except ValueError as exc:
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
+    rules = [EntityRule(name=n, pattern=p) for n, p in parsed]
     if rules:
         settings.entity_rules = rules
         click.echo("Entity rules: " + ", ".join(r.name for r in rules))
