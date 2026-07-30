@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -60,6 +61,27 @@ def _apply_model_overrides(
         os.environ["EMBED_BASE_URL"] = embed_base_url
 
 
+def parse_entity_patterns(specs: list[str]) -> list[tuple[str, str]]:
+    r"""Parse ``NAME=REGEX`` entity-pattern specs into ``[(name, regex)]``.
+
+    A bare regex (no ``NAME=``) means the common instruction case. The prefix is
+    only treated as a kind when it looks like one: ``=`` is common *inside*
+    regexes (lookarounds), so splitting on the first ``=`` unconditionally would
+    turn ``Syntax\s+([A-Z]+)(?=\s)`` into a rule named ``Syntax\s+([A-Z]+)(?``
+    with a truncated pattern — silently, surfacing much later as "no entities
+    tagged". Raises ValueError when the pattern is empty.
+    """
+    out: list[tuple[str, str]] = []
+    for spec in specs:
+        name, sep, pattern = spec.partition("=")
+        if not sep or not re.fullmatch(r"\w+", name):
+            name, pattern = "instruction", spec
+        if not pattern:
+            raise ValueError(f"--entity-pattern needs NAME=REGEX, got {spec!r}")
+        out.append((name.strip(), pattern))
+    return out
+
+
 @click.group()
 def cli() -> None:
     """Rosetta: ISA manual → Ghidra processor module generator."""
@@ -79,14 +101,21 @@ def cli() -> None:
          "all .c, .h, .py, .cpp, .hpp files are loaded as text chunks.")
 @click.option("--embed-model", default=None, help="Override EMBED_MODEL env var")
 @click.option("--embed-base-url", default=None, help="Override EMBED_BASE_URL env var")
+@click.option("--entity-pattern", "entity_patterns", multiple=True, metavar="NAME=REGEX",
+              help="Tag document entities of kind NAME using REGEX, whose capture "
+                   "group is the entity's name (searched multiline). Repeatable. "
+                   "Recovered structure blocks — encoding diagrams, register-field "
+                   "and pin tables — are attributed to the entity whose heading "
+                   "owns them, so downstream extraction reads them from the "
+                   "document's structure instead of guessing. "
+                   r"E.g. 'instruction=A7\.7\.\d+\s*\n\s*([A-Z][A-Z0-9]*)' or "
+                   r"'register=\n\s*\d+\.\d+\.\d+\s+.{0,60}?\((\w+)\)'. "
+                   "A bare REGEX (no NAME=) is treated as an instruction pattern.")
 @click.option("--instruction-pattern", default=None, metavar="REGEX",
-              help="Per-ISA regex whose capture group is an instruction mnemonic "
-                   "in the manual's headings/opcode tables (searched multiline). "
-                   "Tags instructions so pass-3 discovery and pass-4 encodings are "
-                   "grounded instead of LLM-guessed. "
-                   r"E.g. ARM: 'A7\.7\.\d+\s*\n\s*([A-Z][A-Z0-9]*)'.")
+              help="Deprecated alias for --entity-pattern instruction=REGEX.")
 def ingest(manual: str, db: str, source: bool, embed_model: str | None,
-           embed_base_url: str | None, instruction_pattern: str | None) -> None:
+           embed_base_url: str | None, entity_patterns: tuple[str, ...],
+           instruction_pattern: str | None) -> None:
     """Ingest a PDF manual (or source code directory) into a docquery RAG database.
 
     Run multiple times against the same --db to supplement an existing database
@@ -94,10 +123,10 @@ def ingest(manual: str, db: str, source: bool, embed_model: str | None,
     duplicate chunks.  Use this when pass 3 mnemonic discovery reports low
     coverage and the primary manual does not document all instructions.
 
-    Pass --instruction-pattern to tag every instruction the manual defines: the
-    mnemonic list and per-instruction bit fields are then read from the
-    document's structure deterministically, eliminating the LLM hallucinations
-    of mnemonic discovery and encoding extraction.
+    Pass --entity-pattern to tag the entities a manual defines (instructions,
+    registers, peripherals, …): their names and the structure blocks that belong
+    to them are then read from the document deterministically, eliminating the
+    LLM hallucinations of discovery and encoding extraction.
     """
     import docquery
     from docquery.config import EntityRule, Settings
@@ -105,8 +134,19 @@ def ingest(manual: str, db: str, source: bool, embed_model: str | None,
     _apply_model_overrides(None, None, embed_model, embed_base_url)
     settings = Settings()
     settings.db_path = db
+
+    specs = list(entity_patterns)
     if instruction_pattern:
-        settings.entity_rules = [EntityRule(name="instruction", pattern=instruction_pattern)]
+        specs.append(f"instruction={instruction_pattern}")
+    try:
+        parsed = parse_entity_patterns(specs)
+    except ValueError as exc:
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
+    rules = [EntityRule(name=n, pattern=p) for n, p in parsed]
+    if rules:
+        settings.entity_rules = rules
+        click.echo("Entity rules: " + ", ".join(r.name for r in rules))
 
     src = Path(manual)
     if source:

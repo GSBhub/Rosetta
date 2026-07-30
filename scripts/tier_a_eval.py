@@ -140,6 +140,7 @@ def main() -> None:
     correct = miss_decode = wrong = 0
     hit_mnems: Counter[str] = Counter()
     missed_mnems: Counter[str] = Counter()
+    over_mnems: Counter[str] = Counter()   # what we wrongly decode words AS
     for i, (_word, exp_mnem, _full) in enumerate(truth):
         got = decoded.get(i)
         if got is None:
@@ -151,6 +152,7 @@ def main() -> None:
         else:
             wrong += 1
             missed_mnems[exp_mnem] += 1
+            over_mnems[got] += 1
 
     total = len(truth)
     print("\n===== Tier A mnemonic accuracy =====")
@@ -160,7 +162,10 @@ def main() -> None:
     print(f"\n  distinct mnemonics correct ({len(hit_mnems)}): "
           + " ".join(sorted(hit_mnems)))
     print(f"\n  top missed mnemonics:")
-    for mnem, cnt in missed_mnems.most_common(20):
+    for mnem, cnt in missed_mnems.most_common(15):
+        print(f"    {mnem:10s} x{cnt}")
+    print(f"\n  top over-matchers (wrongly decoded AS):")
+    for mnem, cnt in over_mnems.most_common(15):
         print(f"    {mnem:10s} x{cnt}")
 
 

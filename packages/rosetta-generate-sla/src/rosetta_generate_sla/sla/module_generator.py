@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import os
 from importlib.resources import files
 from pathlib import Path
 
@@ -28,7 +29,7 @@ log = logging.getLogger(__name__)
 
 # Minimum fixed opcode bits for an encoding to be emitted as a real decode
 # pattern; fewer than this over-matches unrelated words (see generate()).
-_MIN_CONSTRAINT_BITS = 8
+_MIN_CONSTRAINT_BITS = int(os.environ.get("ROSETTA_MIN_CONSTRAINT_BITS", "8"))
 
 
 def _get_templates_dir() -> Path:
@@ -59,6 +60,21 @@ class ModuleGenerator:
         sp = find_register(registers, "SP", "ESP", "RSP", description_keyword="stack pointer")
 
         normalized_instructions = [normalize_instruction(i) for i in spec.instructions]
+
+        # Width sanity: a recovered encoding wider than any width the ISA declares
+        # is a mis-parsed diagram (e.g. two stacked 32-bit grids read as one
+        # 64-bit one). Its geometry can't be trusted and an over-wide token makes
+        # SLEIGH reject the constructor outright, so fall back to a stub at the
+        # widest declared width.
+        max_declared = max(spec.meta.instruction_sizes_bits, default=0)
+        if max_declared:
+            for instr in normalized_instructions:
+                if instr.encoding_bits > max_declared:
+                    log.warning("Dropping implausible %d-bit encoding for %s (declared max %d)",
+                                instr.encoding_bits, instr.mnemonic, max_declared)
+                    instr.encoding_bits = max_declared
+                    instr.bit_fields = {}
+                    instr.bit_constraints = {}
 
         canonical_widths: dict[str, int] = {}
         for instr in normalized_instructions:
@@ -99,6 +115,18 @@ class ModuleGenerator:
         for instr in normalized_instructions:
             if sum(len(v) for v in instr.bit_constraints.values()) < _MIN_CONSTRAINT_BITS:
                 instr.bit_constraints = {}
+
+        # Multi-encoding can leave a mnemonic with both a grounded constructor and
+        # a stub one (a sibling encoding whose constraints the precision guard
+        # dropped). The stub adds no decode information and can even collide with
+        # a real full-width pattern, so keep it only when nothing else grounds it.
+        grounded_mnemonics = {
+            i.mnemonic for i in normalized_instructions if i.bit_constraints
+        }
+        normalized_instructions = [
+            i for i in normalized_instructions
+            if i.bit_constraints or i.mnemonic not in grounded_mnemonics
+        ]
 
         pattern_seen: dict[frozenset, int] = {}
         duplicate_indices: set[int] = set()

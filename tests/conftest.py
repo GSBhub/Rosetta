@@ -14,14 +14,29 @@ from rosetta.extraction.schemas import ISAMeta, ISASpec, InstructionDef, Registe
 REPO_ROOT = Path(__file__).parent.parent
 
 
-def ghidra_home() -> Path | None:
-    raw = os.environ.get("GHIDRA_HOME", "")
+def _env_from_dotenv(key: str) -> str:
+    """Value of *key* from the real environment, else from the repo-root .env."""
+    raw = os.environ.get(key, "")
     if not raw:
         env_path = REPO_ROOT / ".env"
         if env_path.exists():
             for line in env_path.read_text().splitlines():
-                if line.startswith("GHIDRA_HOME="):
+                if line.startswith(f"{key}="):
                     raw = line.partition("=")[2].strip()
+    return raw
+
+
+def ghidra_home() -> Path | None:
+    # Mirror the CLI's _load_env: Ghidra's shell wrappers need `java`, so a test
+    # that finds GHIDRA_HOME in .env must export JAVA_HOME from there too —
+    # otherwise it un-skips and then fails inside the subprocess for want of a JDK.
+    java_home = _env_from_dotenv("JAVA_HOME")
+    if java_home:
+        os.environ.setdefault("JAVA_HOME", java_home)
+        java_bin = str(Path(java_home) / "bin")
+        if java_bin not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = java_bin + os.pathsep + os.environ.get("PATH", "")
+    raw = _env_from_dotenv("GHIDRA_HOME")
     return Path(raw) if raw else None
 
 
