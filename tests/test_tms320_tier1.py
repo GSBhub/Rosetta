@@ -96,7 +96,7 @@ def test_build_attach_stmts_width_suffixed():
     instrs = _tms_spec().instructions
     symbols = build_field_symbols(instrs)
     stmts = build_attach_stmts(instrs, meta, symbols)
-    assert stmts == [{"sym": "s32", "names": ["1", "2"]}]
+    assert stmts == [{"sym": "s32", "names": '"1" "2"'}]
 
 
 def test_render_predication_unit_and_pbit():
@@ -141,7 +141,7 @@ def test_generate_multi_language_and_attach():
     # one <language> per family
     for fam in ("C62x", "C64x", "C67x"):
         assert f":32:{fam}" in ldefs
-    assert "attach names [ s32 ] [ 1 2 ];" in slaspec
+    assert 'attach names [ s32 ] [ "1" "2" ];' in slaspec
     # grounded constructor: mnemonic-first with bound predication/side/p
     assert ":ABSDP creg32 z32 s32 is" in slaspec
     assert "op_11_232=0b1011001000" in slaspec
@@ -204,3 +204,19 @@ def test_every_declared_token_is_unique_and_constructors_reference_them():
                    for s in re.findall(r"& (\w+)", line)}
     undeclared = referenced - set(declared) - {"op32stub", "op16stub"}
     assert not undeclared, f"constructors reference undeclared symbols: {undeclared}"
+
+
+def test_precision_guard_drops_under_constrained_encodings():
+    """An encoding pinning too few opcode bits over-matches unrelated words, so
+    it falls back to a non-matching stub — not-decoded beats wrong-decoded."""
+    spec = _tms_spec()
+    spec.instructions = [
+        # 7 bits: below the threshold -> blanked to a stub
+        _instr("WEAK", {"op_11_5": "11:5"}, {"op_11_5": "0000011"}),
+        # 10 bits: kept as a real pattern
+        _instr("STRONG", {"op_11_2": "11:2"}, {"op_11_2": "1011001000"}),
+    ]
+    slaspec = _render(spec).split("@@LDEFS@@")[0]
+    assert ":STRONG is op_11_232=0b1011001000" in slaspec
+    weak = [ln for ln in slaspec.splitlines() if ln.startswith(":WEAK")]
+    assert weak and "stub=" in weak[0], f"under-constrained encoding kept: {weak}"

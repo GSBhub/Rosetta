@@ -34,7 +34,7 @@ define token instr{{ tok.width }}({{ tok.width }})
 
 # Attached operand fields (register side, condition register, functional unit, …)
 {% for a in attach_stmts %}
-attach names [ {{ a.sym }} ] [ {{ a.names | join(' ') }} ];
+attach names [ {{ a.sym }} ] [ {{ a.names }} ];
 {% endfor %}
 
 # Instruction constructors

@@ -74,16 +74,21 @@ async def _instructions_async(state: PipelineState) -> dict[str, Any]:
         # Resume: load already-extracted instructions.
         resume_from = chunk_save_path if resume else None
         if resume_from and resume_from.exists():
-            seen: dict[str, InstructionDef] = {}
+            # A mnemonic now yields one InstructionDef per grounded encoding, so
+            # the partial file holds several lines per mnemonic. Keying by
+            # mnemonic alone would keep only the last and silently drop the rest
+            # — over half the encodings on a multi-encoding ISA.
+            seen: dict[str, list[InstructionDef]] = {}
             for line in resume_from.read_text().splitlines():
                 line = line.strip()
                 if line:
                     instr = InstructionDef.model_validate_json(line)
-                    seen[instr.mnemonic.upper()] = instr
-            results = list(seen.values())
+                    seen.setdefault(instr.mnemonic.upper(), []).append(instr)
+            results = [i for group in seen.values() for i in group]
             before = len(mnemonics)
             mnemonics = [m for m in mnemonics if m.upper() not in seen]
-            log.info("Resume: %d done, %d remaining", before - len(mnemonics), len(mnemonics))
+            log.info("Resume: %d mnemonics done (%d encodings restored), %d remaining",
+                     before - len(mnemonics), len(results), len(mnemonics))
         elif chunk_save_path:
             chunk_save_path.write_text("")
 
@@ -101,10 +106,12 @@ async def _instructions_async(state: PipelineState) -> dict[str, Any]:
                 tasks = [
                     extract_instruction_async(
                         m, settings, semaphore, executor,
-                        grounded_encoding=encoding_index.get(m.strip().upper()))
+                        grounded_encodings=encoding_index.get(m.strip().upper()))
                     for m in chunk
                 ]
-                chunk_results = await asyncio.gather(*tasks)
+                chunk_lists = await asyncio.gather(*tasks)
+                # Each task returns a list (one InstructionDef per grounded encoding).
+                chunk_results = [d for sub in chunk_lists for d in sub]
                 results.extend(chunk_results)
                 gc.collect()
                 log_memory(f"pass4-chunk-{i // chunk_size}")

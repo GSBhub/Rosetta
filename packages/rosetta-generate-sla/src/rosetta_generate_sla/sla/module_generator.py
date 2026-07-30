@@ -21,9 +21,14 @@ from rosetta_generate_sla.sla.sanitize import (
     find_register,
     normalize_instruction,
     sanitize_pcode,
+    sanitize_registers,
 )
 
 log = logging.getLogger(__name__)
+
+# Minimum fixed opcode bits for an encoding to be emitted as a real decode
+# pattern; fewer than this over-matches unrelated words (see generate()).
+_MIN_CONSTRAINT_BITS = 8
 
 
 def _get_templates_dir() -> Path:
@@ -49,8 +54,9 @@ class ModuleGenerator:
         lang_dir = out_dir / processor_name / "data" / "languages"
         lang_dir.mkdir(parents=True, exist_ok=True)
 
-        pc = find_register(spec.registers, "PC", "IP", "EIP", "RIP", description_keyword="program counter")
-        sp = find_register(spec.registers, "SP", "ESP", "RSP", description_keyword="stack pointer")
+        registers = sanitize_registers(spec.registers)
+        pc = find_register(registers, "PC", "IP", "EIP", "RIP", description_keyword="program counter")
+        sp = find_register(registers, "SP", "ESP", "RSP", description_keyword="stack pointer")
 
         normalized_instructions = [normalize_instruction(i) for i in spec.instructions]
 
@@ -86,6 +92,14 @@ class ModuleGenerator:
                               instr.mnemonic, f, v, len(v), span)
             instr.bit_constraints = kept
 
+        # Precision guard: an encoding that pins too few opcode bits over-matches
+        # unrelated words (e.g. a 1-bit constraint matches half the space),
+        # mis-decoding far more than it decodes. Blank those so they fall back to
+        # a non-matching stub — not-decoded beats wrong-decoded.
+        for instr in normalized_instructions:
+            if sum(len(v) for v in instr.bit_constraints.values()) < _MIN_CONSTRAINT_BITS:
+                instr.bit_constraints = {}
+
         pattern_seen: dict[frozenset, int] = {}
         duplicate_indices: set[int] = set()
         for idx, instr in enumerate(normalized_instructions):
@@ -119,7 +133,7 @@ class ModuleGenerator:
 
         ctx = {
             "meta": meta,
-            "registers": spec.registers,
+            "registers": registers,
             "instructions": normalized_instructions,
             "tokens": tokens,
             "attach_stmts": build_attach_stmts(normalized_instructions, meta, symbols),

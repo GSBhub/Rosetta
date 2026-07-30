@@ -39,19 +39,34 @@ def _apply_grounded_encoding(instr: InstructionDef, grounded: dict | None) -> In
     return instr
 
 
+def _expand_encodings(
+    base: InstructionDef, grounded_encodings: list[dict] | None
+) -> list[InstructionDef]:
+    """One InstructionDef per grounded encoding (C6x maps a mnemonic to many
+    opcode-map encodings). The LLM-derived semantics/pcode are shared across the
+    copies; only the decode geometry differs. No grounded encodings → [base]."""
+    if not grounded_encodings:
+        return [base]
+    return [
+        _apply_grounded_encoding(base.model_copy(deep=True), enc)
+        for enc in grounded_encodings
+    ]
+
+
 async def extract_instruction_async(
     mnemonic: str,
     settings: Settings,
     semaphore: asyncio.Semaphore,
     executor: ThreadPoolExecutor,
-    grounded_encoding: dict | None = None,
-) -> InstructionDef:
+    grounded_encodings: list[dict] | None = None,
+) -> list[InstructionDef]:
     """Async wrapper: runs sync ExtractionPipeline in a thread-pool executor.
 
     settings.vs must already be populated via _build_chroma() before calling.
-    When *grounded_encoding* is supplied (from docquery's recovered bit
-    diagram), it overrides the LLM's bit_fields / bit_constraints so the decode
-    pattern is grounded rather than transcribed by the model.
+    Returns one InstructionDef per *grounded_encodings* entry (from docquery's
+    recovered bit diagrams), each overriding the LLM's bit_fields /
+    bit_constraints so the decode pattern is grounded rather than transcribed by
+    the model. Empty grounded_encodings → a single LLM-only InstructionDef.
     """
     async with semaphore:
         query = (
@@ -70,11 +85,11 @@ async def extract_instruction_async(
             result = pipeline.run(query)
             if not isinstance(result, InstructionDef):
                 result = InstructionDef(mnemonic=mnemonic, semantics=str(result), encoding_bits=32)
-            return _apply_grounded_encoding(result, grounded_encoding)
+            return result
 
         try:
-            return await asyncio.get_event_loop().run_in_executor(executor, _run_sync)
+            base = await asyncio.get_event_loop().run_in_executor(executor, _run_sync)
         except Exception as exc:
             log.warning("Failed to extract %s: %s", mnemonic, exc)
-            stub = InstructionDef(mnemonic=mnemonic, semantics="Unknown", encoding_bits=32)
-            return _apply_grounded_encoding(stub, grounded_encoding)
+            base = InstructionDef(mnemonic=mnemonic, semantics="Unknown", encoding_bits=32)
+        return _expand_encodings(base, grounded_encodings)
