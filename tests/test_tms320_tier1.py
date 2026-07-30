@@ -17,6 +17,7 @@ from rosetta_schemas.overlay import apply_isa_config
 from rosetta_generate_sla.sla.module_generator import ModuleGenerator
 from rosetta_generate_sla.sla.render import (
     build_attach_stmts,
+    build_field_symbols,
     build_render_instructions,
 )
 
@@ -92,7 +93,9 @@ def test_apply_isa_config_no_decode_is_noop(tmp_path):
 
 def test_build_attach_stmts_width_suffixed():
     meta = _meta(field_attachments={"s": ["1", "2"]})
-    stmts = build_attach_stmts(_tms_spec().instructions, meta)
+    instrs = _tms_spec().instructions
+    symbols = build_field_symbols(instrs)
+    stmts = build_attach_stmts(instrs, meta, symbols)
     assert stmts == [{"sym": "s32", "names": ["1", "2"]}]
 
 
@@ -152,3 +155,52 @@ def test_generate_without_overlay_is_plain():
     assert ldefs.count("<language ") == 1
     assert "attach names" not in slaspec
     assert ":ABSDP is op_11_232=0b1011001000" in slaspec  # no creg/z/s operands
+
+
+# ── token symbols: a field name is not position-stable ──────────────────────
+
+def test_ambiguous_field_name_gets_position_disambiguated_symbols():
+    """The same name at different ranges must not share one token symbol.
+
+    Recovery yields e.g. `creg` at both 31:29 and 31:30 in one manual. A token
+    is declared once, so reusing the symbol would decode every instruction but
+    the first from the wrong bits.
+    """
+    instrs = [
+        _instr("A", {"creg": "31:29", "op_11_2": "11:2"}, {"op_11_2": "1011001000"}),
+        _instr("B", {"creg": "31:30", "op_11_2": "11:2"}, {"op_11_2": "1111001000"}),
+    ]
+    symbols = build_field_symbols(instrs)
+    assert symbols[("creg", "31:29", 32)] == "creg_31_29_32"
+    assert symbols[("creg", "31:30", 32)] == "creg_31_30_32"
+    # unambiguous names keep the plain symbol
+    assert symbols[("op_11_2", "11:2", 32)] == "op_11_232"
+
+
+def test_unambiguous_field_keeps_plain_symbol():
+    instrs = [_instr("A", {"creg": "31:29"}, {}), _instr("B", {"creg": "31:29"}, {})]
+    assert build_field_symbols(instrs)[("creg", "31:29", 32)] == "creg32"
+
+
+def test_every_declared_token_is_unique_and_constructors_reference_them():
+    """End-to-end: no duplicate token declarations, and every symbol a
+    constructor references is declared."""
+    import re
+    spec = _tms_spec()
+    spec.meta.predicate_fields = ["creg", "z"]
+    spec.instructions = [
+        _instr("A", {"creg": "31:29", "z": "28:28", "op_11_2": "11:2"},
+               {"op_11_2": "1011001000"}),
+        _instr("B", {"creg": "31:30", "z": "29:27", "op_11_2": "11:2"},
+               {"op_11_2": "1111001000"}),
+    ]
+    slaspec = _render(spec).split("@@LDEFS@@")[0]
+
+    declared = re.findall(r"^\s+(\w+) = \(\d+,\d+\)", slaspec, re.M)
+    assert len(declared) == len(set(declared)), f"duplicate token declarations: {declared}"
+
+    referenced = set(re.findall(r"(\w+)=0b[01]+", slaspec))
+    referenced |= {s for line in slaspec.splitlines() if line.startswith(":")
+                   for s in re.findall(r"& (\w+)", line)}
+    undeclared = referenced - set(declared) - {"op32stub", "op16stub"}
+    assert not undeclared, f"constructors reference undeclared symbols: {undeclared}"

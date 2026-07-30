@@ -1,13 +1,14 @@
-"""Build SLEIGH constructor patterns/displays and `attach names` statements.
+"""Build SLEIGH token fields, constructor patterns/displays and `attach names`.
 
-Tier 1 structured-decode rendering. Kept in Python (not the Jinja template) so
-the SLEIGH-validity rules are unit-testable by string inspection. All behaviour
-is gated on the backend-neutral ISAMeta fields (isa_variants, parallel_field,
-predicate_fields, field_attachments) + InstructionDef.functional_unit — when
-those are empty (every ISA except a configured TMS320) output is unchanged.
+Kept in Python (not the Jinja template) so the SLEIGH-validity rules are
+unit-testable by string inspection, and so token declarations and the
+constructors that reference them are derived from one shared symbol table —
+they must agree exactly or the spec decodes from the wrong bits.
 
-Token fields are width-suffixed to avoid cross-width collisions (e.g. `s` in a
-32-bit token is `s32`), matching the token definitions in processor.slaspec.j2.
+Structured-decode rendering is gated on the backend-neutral ISAMeta fields
+(parallel_field, predicate_fields, field_attachments) plus
+InstructionDef.functional_unit. When those are empty (every ISA except a
+configured one) output is unchanged.
 """
 
 from __future__ import annotations
@@ -15,36 +16,118 @@ from __future__ import annotations
 from rosetta_schemas.models import ISAMeta, InstructionDef
 
 
-def field_sym(name: str, width: int) -> str:
-    """Width-suffixed token-field symbol, matching processor.slaspec.j2."""
-    return f"{name}{width}"
+def _split_range(rng: str) -> tuple[int, int] | None:
+    """'hi:lo' -> (hi, lo), or None when unparseable."""
+    hi, sep, lo = str(rng).partition(":")
+    if not sep:
+        return None
+    try:
+        return int(hi), int(lo)
+    except ValueError:
+        return None
 
 
-def build_attach_stmts(instructions: list[InstructionDef], meta: ISAMeta) -> list[dict]:
-    """`attach names` statements: one per (width, attachment field) actually defined.
+def build_field_symbols(instructions: list[InstructionDef]) -> dict[tuple[str, str, int], str]:
+    """``(field_name, 'hi:lo', width) -> SLEIGH token symbol``.
 
-    Renders raw bit fields (register side, condition register, …) as symbolic
-    operands. Empty when meta.field_attachments is empty.
+    Field names recovered from a manual are **not** position-stable: the same
+    name routinely appears at different bit ranges across instructions (``creg``
+    at both 31:29 and 31:30, ``x`` at half a dozen). A token symbol is declared
+    once, so reusing one symbol for several ranges would silently decode every
+    instruction but the first from the wrong bits.
+
+    Names used at a single range keep the plain ``<name><width>`` symbol — the
+    common case, and what keeps output stable for well-formed manuals. Ambiguous
+    names are disambiguated by position (``creg_31_29_32``).
+    """
+    ranges: dict[tuple[str, int], set[str]] = {}
+    for instr in instructions:
+        width = instr.encoding_bits
+        for name, rng in instr.bit_fields.items():
+            if _split_range(rng):
+                ranges.setdefault((name, width), set()).add(str(rng))
+
+    symbols: dict[tuple[str, str, int], str] = {}
+    for (name, width), rngs in ranges.items():
+        for rng in rngs:
+            if len(rngs) == 1:
+                symbols[(name, rng, width)] = f"{name}{width}"
+            else:
+                # Separator before the width: `creg_31_29` + `32` would read as
+                # the unparseable `creg_31_2932`.
+                hi, lo = _split_range(rng)  # type: ignore[misc]
+                symbols[(name, rng, width)] = f"{name}_{hi}_{lo}_{width}"
+    return symbols
+
+
+def symbol_for(
+    symbols: dict[tuple[str, str, int], str], instr: InstructionDef, name: str
+) -> str | None:
+    """The token symbol *instr* uses for its field *name*, or None if it has none."""
+    rng = instr.bit_fields.get(name)
+    if rng is None:
+        return None
+    return symbols.get((name, str(rng), instr.encoding_bits))
+
+
+def build_tokens(
+    instructions: list[InstructionDef],
+    widths: list[int],
+    symbols: dict[tuple[str, str, int], str],
+) -> list[dict]:
+    """One token block per width: ``[{"width", "fields": [{"sym","lo","hi"}]}]``.
+
+    Built here rather than in the template so every declared symbol comes from
+    the same table the constructors reference.
+    """
+    per_width: dict[int, dict[str, tuple[int, int]]] = {}
+    for instr in instructions:
+        width = instr.encoding_bits
+        for name, rng in instr.bit_fields.items():
+            parts = _split_range(rng)
+            sym = symbols.get((name, str(rng), width))
+            if not parts or not sym:
+                continue
+            hi, lo = parts
+            per_width.setdefault(width, {}).setdefault(sym, (lo, hi))
+
+    return [
+        {
+            "width": width,
+            "fields": [
+                {"sym": sym, "lo": lo, "hi": hi}
+                for sym, (lo, hi) in (per_width.get(width) or {}).items()
+            ],
+        }
+        for width in widths
+    ]
+
+
+def build_attach_stmts(
+    instructions: list[InstructionDef],
+    meta: ISAMeta,
+    symbols: dict[tuple[str, str, int], str],
+) -> list[dict]:
+    """`attach names` statements for the configured attachment fields.
+
+    A name that resolved to several symbols (see :func:`build_field_symbols`)
+    gets one statement per symbol, so every declared variant is attached.
     """
     stmts: list[dict] = []
     seen: set[str] = set()
-    widths = sorted({i.encoding_bits for i in instructions if i.encoding_bits > 0})
-    for width in widths:
-        fields_here: set[str] = set()
-        for i in instructions:
-            if i.encoding_bits == width:
-                fields_here |= set(i.bit_fields)
-        for field, names in meta.field_attachments.items():
-            if field in fields_here:
-                sym = field_sym(field, width)
-                if sym not in seen:
-                    stmts.append({"sym": sym, "names": [str(n) for n in names]})
-                    seen.add(sym)
+    for (name, _rng, _width), sym in sorted(symbols.items()):
+        names = meta.field_attachments.get(name)
+        if not names or sym in seen:
+            continue
+        seen.add(sym)
+        stmts.append({"sym": sym, "names": [str(n) for n in names]})
     return stmts
 
 
 def build_render_instructions(
-    instructions: list[InstructionDef], meta: ISAMeta
+    instructions: list[InstructionDef],
+    meta: ISAMeta,
+    symbols: dict[tuple[str, str, int], str] | None = None,
 ) -> list[dict]:
     """Precompute {display, pattern, pcode_hint} per instruction for the template.
 
@@ -53,6 +136,8 @@ def build_render_instructions(
     operand fields are layered on as display + bound pattern fields. Instructions
     without recovered opcode bits fall back to a unique opNstub pattern.
     """
+    if symbols is None:
+        symbols = build_field_symbols(instructions)
     par = meta.parallel_field
     out: list[dict] = []
     stub_id = 0
@@ -69,23 +154,22 @@ def build_render_instructions(
 
         # Predication (e.g. creg/z) — bound + shown right after the mnemonic.
         for f in meta.predicate_fields:
-            if f in instr.bit_fields:
-                s = field_sym(f, width)
+            if s := symbol_for(symbols, instr, f):
                 trail.append(s)
                 binds.append(s)
 
         # Attached operand fields (e.g. register side 's'), excluding predication
         # and the parallel bit — shown after predication.
         for f in meta.field_attachments:
-            if f in instr.bit_fields and f not in meta.predicate_fields and f != par:
-                s = field_sym(f, width)
+            if f in meta.predicate_fields or f == par:
+                continue
+            if s := symbol_for(symbols, instr, f):
                 trail.append(s)
                 binds.append(s)
 
         # Parallel marker (VLIW p-bit): bind always; display (as trailing operand)
         # only when the config attaches display names to it.
-        if par and par in instr.bit_fields:
-            psym = field_sym(par, width)
+        if par and (psym := symbol_for(symbols, instr, par)):
             binds.append(psym)
             if par in meta.field_attachments:
                 trail.append(psym)
@@ -93,7 +177,10 @@ def build_render_instructions(
         display = " ".join([mnem, *trail])
 
         if instr.bit_constraints:
-            core = [f"{field_sym(f, width)}=0b{v}" for f, v in instr.bit_constraints.items()]
+            core = []
+            for f, v in instr.bit_constraints.items():
+                if s := symbol_for(symbols, instr, f):
+                    core.append(f"{s}=0b{v}")
             pattern = " & ".join(core + binds)
         else:
             pattern = f"op{width}stub={stub_id}"

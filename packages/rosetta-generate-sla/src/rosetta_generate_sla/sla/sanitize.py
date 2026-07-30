@@ -29,10 +29,14 @@ def sanitize_pcode(hint: str) -> str:
     s = hint.strip() if hint else ""
     if not s:
         return "local tmp:4 = 0;"
+    # The rejected hint is kept as a comment, which must be a single line: a
+    # SLEIGH '#' comment ends at the newline, so a multi-line hint would spill
+    # its own prose into the constructor body as invalid p-code.
+    comment = " ".join(s.split())[:80]
     if not s.endswith(";"):
-        return f"# {s[:80]}\n    local tmp:4 = 0;"
+        return f"# {comment}\n    local tmp:4 = 0;"
     if _BAD_PCODE.search(s):
-        return f"# {s[:80]}\n    local tmp:4 = 0;"
+        return f"# {comment}\n    local tmp:4 = 0;"
     return s
 
 

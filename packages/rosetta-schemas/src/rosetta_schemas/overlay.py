@@ -30,12 +30,15 @@ from rosetta_schemas.models import ISASpec
 
 
 def apply_isa_config(spec: ISASpec, config_path: str | Path) -> ISASpec:
-    """Overlay the ``[decode]`` table of *config_path* onto *spec* in place.
+    """Overlay the ``[decode]`` table of *config_path* onto *spec*.
 
-    Missing keys leave the spec untouched, so a config without a ``[decode]``
-    table (or no config at all) is a no-op — existing ISAs are unaffected.
+    Mutates *spec* in place and returns it for convenience — the return value is
+    the same object, not a copy. Missing keys leave the spec untouched, so a
+    config without a ``[decode]`` table (or no config at all) is a no-op —
+    existing ISAs are unaffected.
     """
-    data = tomllib.loads(Path(config_path).read_text())
+    with Path(config_path).open("rb") as fh:
+        data = tomllib.load(fh)
     dec = data.get("decode")
     if not dec:
         return spec

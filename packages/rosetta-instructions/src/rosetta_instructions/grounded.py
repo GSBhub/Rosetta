@@ -29,7 +29,11 @@ def _encodings_by_page(vs: Any) -> dict[Any, list[dict]]:
         raw = vs._collection.get(  # type: ignore[attr-defined]
             where={"kind": "encoding_grid"}, include=["documents", "metadatas"])
     except Exception as exc:  # pragma: no cover - store shape
-        log.warning("could not read encoding_grid docs: %s", exc)
+        # Degrading here is silent in effect: the build still succeeds, just with
+        # stub constructors instead of real decode patterns. Log at error level
+        # so the cause is visible rather than inferred from a poor decode score.
+        log.error("could not read encoding_grid docs (%s); "
+                  "grounding disabled, constructors will be stubs", exc)
         return {}
 
     by_page: dict[Any, list[dict]] = {}
@@ -51,9 +55,12 @@ def _record_to_fields(rec: dict) -> dict | None:
     for seg in rec["segments"]:
         rng = f"{seg['hi']}:{seg['lo']}"
         if seg.get("value") is not None:
-            # fixed opcode bits — the decode pattern; unnamed segments get a
-            # position-derived field name so SLEIGH can reference them.
-            name = seg.get("name") or f"op_{seg['hi']}_{seg['lo']}"
+            # Fixed opcode bits — the decode pattern. Always name these by
+            # position, never by the manual's label: a label is not
+            # position-stable across a manual (the same name appears at
+            # different ranges), and a constrained field that collides with a
+            # differently-ranged one elsewhere would decode from wrong bits.
+            name = f"op_{seg['hi']}_{seg['lo']}"
             bit_fields[name] = rng
             bit_constraints[name] = seg["value"]
         elif seg.get("name"):
